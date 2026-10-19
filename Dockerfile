@@ -34,6 +34,6 @@ ENV IXCACHE_CACHE_DIR=/data \
 USER 10940:10940
 WORKDIR /opt/ixcache
 VOLUME ["/data"]
-EXPOSE 1094
+EXPOSE 1092
 
 ENTRYPOINT ["java", "-cp", "/opt/ixcache/lib/*", "org.atlasml.ixcache.Server"]

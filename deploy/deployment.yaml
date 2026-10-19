@@ -1,4 +1,5 @@
-# Single-replica ixcache server.
+# Single-replica ixcache server on the host network of the xcache=slate01 node.
+# Clients connect to root://<node>:1092//root://origin//path.
 #
 # Prerequisites:
 #   - Service certificate and key in the xcache-cert-secret Secret (keys
@@ -33,6 +34,15 @@ spec:
         runAsNonRoot: true
         fsGroup: 10940
         fsGroupChangePolicy: OnRootMismatch
+      hostNetwork: true
+      nodeSelector:
+        xcache: slate01
+      tolerations:
+        - effect: PreferNoSchedule
+          key: xcache
+          operator: Equal
+          value: "true"
+      restartPolicy: Always
       # Allow in-flight transfers to finish and metadata to be flushed.
       terminationGracePeriodSeconds: 120
       # Native sidecar (Kubernetes 1.29+): keeps the proxy fresh for the pod's
@@ -52,7 +62,12 @@ spec:
           imagePullPolicy: Always
           startupProbe:
             exec:
-              command: [sh, -c, "test -d /etc/CA/certificates && test -s /etc/proxy/x509up"]
+              command:
+                [
+                  sh,
+                  -c,
+                  "test -d /etc/CA/certificates && test -s /etc/proxy/x509up",
+                ]
             periodSeconds: 5
             failureThreshold: 60
           resources:
@@ -78,7 +93,7 @@ spec:
           imagePullPolicy: Always
           ports:
             - name: xrootd
-              containerPort: 1094
+              containerPort: 1092
               protocol: TCP
           env:
             - name: IXCACHE_CACHE_DIR
@@ -117,8 +132,10 @@ spec:
             capabilities:
               drop: [ALL]
           volumeMounts:
-            - name: data
-              mountPath: /data
+            - mountPath: /data
+              name: xcache-data-0
+            - mountPath: /data2
+              name: xcache-data-1
             - name: x509-data
               mountPath: /etc/proxy
               readOnly: true
@@ -129,9 +146,6 @@ spec:
               mountPath: /tmp
 
       volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: ixcache-data
         # CA certificates and CRLs, filled and refreshed by the x509 sidecar.
         - name: grid-security
           emptyDir:
@@ -153,3 +167,9 @@ spec:
               - key: usercert
                 path: usercert.pem
             secretName: xcache-cert-secret
+        - hostPath:
+            path: /xcache/23
+          name: xcache-data-0
+        - hostPath:
+            path: /xcache/24
+          name: xcache-data-1

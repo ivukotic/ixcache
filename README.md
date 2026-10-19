@@ -17,7 +17,7 @@ To test access of the data access from origin user can do:
 xrdcp -f root://xrootd.aglt2.org:1094//atlaslocalgroupdisk/rucio/user/ivukotic/7d/9b/xcache.test.dat /dev/null
 
 while copying the same data through ixcache would be done like:
-xrdcp -f root://<ixcache_host>:1094//root://xrootd.aglt2.org:1094//atlaslocalgroupdisk/rucio/user/ivukotic/7d/9b/xcache.test.dat /dev/null
+xrdcp -f root://<ixcache_host>:1092//root://xrootd.aglt2.org:1094//atlaslocalgroupdisk/rucio/user/ivukotic/7d/9b/xcache.test.dat /dev/null
 
 Logging is done by sendind a UDP packet to (ixcache.atlas-ml.org:1095) describing the transfer (new bytes in, bytes out, duration, original file path).
 

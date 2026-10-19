@@ -5,9 +5,7 @@ namespace: ixcache
 
 resources:
   - namespace.yaml
-  - storage.yaml
   - deployment.yaml
-  - service.yaml
 
 images:
   - name: ivukotic/ixcache
