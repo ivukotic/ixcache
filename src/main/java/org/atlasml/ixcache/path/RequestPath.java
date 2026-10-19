@@ -33,18 +33,19 @@ public record RequestPath(String scheme, String host, int port, String path, Str
         opaque = opaque == null ? "" : opaque;
     }
 
-    /** Parses the path a client sent in {@code kXR_open}. */
+    /**
+     * Parses the path a client sent in {@code kXR_open}. Any number of slashes
+     * may follow the scheme: ROOT collapses {@code //} in URLs, so it sends
+     * {@code /root:/origin/path} for {@code /root://origin//path}.
+     */
     public static RequestPath parse(String clientPath) {
-        String s = clientPath;
-        while (s.startsWith("/")) {
-            s = s.substring(1);
-        }
-        int schemeEnd = s.indexOf("://");
+        String s = clientPath.replaceFirst("^/+", "");
+        int schemeEnd = s.indexOf(":/");
         if (schemeEnd < 0) {
             throw new IllegalArgumentException("path does not embed an origin URL: " + clientPath);
         }
         String scheme = s.substring(0, schemeEnd);
-        String rest = s.substring(schemeEnd + 3);
+        String rest = s.substring(schemeEnd + 1).replaceFirst("^/+", "");
 
         int slash = rest.indexOf('/');
         if (slash < 0) {

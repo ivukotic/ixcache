@@ -17,7 +17,40 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <slf4j.version>2.0.16</slf4j.version>
     <junit.version>5.11.4</junit.version>
+    <xrootd4j.version>4.6.5</xrootd4j.version>
+    <netty.version>4.1.118.Final</netty.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- xrootd4j pins an old Netty 4.1; use a current 4.1 release instead. -->
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-bom</artifactId>
+        <version>${netty.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- xrootd4j-gsi pins canl 2.1.1, which subclasses BouncyCastle internals that
+           are no longer public in the bcprov it also pins, so chain validation fails
+           with IllegalAccessError. canl 2.7.0 is built against BouncyCastle 1.68. -->
+      <dependency>
+        <groupId>eu.eu-emi.security</groupId>
+        <artifactId>canl</artifactId>
+        <version>2.7.0</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcprov-jdk15on</artifactId>
+        <version>1.68</version>
+      </dependency>
+      <dependency>
+        <groupId>org.bouncycastle</groupId>
+        <artifactId>bcpkix-jdk15on</artifactId>
+        <version>1.68</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -25,17 +58,35 @@
       <artifactId>slf4j-api</artifactId>
       <version>${slf4j.version}</version>
     </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.dcache</groupId>
+      <artifactId>xrootd4j</artifactId>
+      <version>${xrootd4j.version}</version>
+      <exclusions>
+        <!-- Native TLS is not used; the client-facing protocol runs without TLS. -->
+        <exclusion>
+          <groupId>io.netty</groupId>
+          <artifactId>netty-tcnative-boringssl-static</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.dcache</groupId>
+      <artifactId>xrootd4j-gsi</artifactId>
+      <version>${xrootd4j.version}</version>
+    </dependency>
 
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-simple</artifactId>
-      <version>${slf4j.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

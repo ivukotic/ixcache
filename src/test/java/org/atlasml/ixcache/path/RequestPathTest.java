@@ -22,6 +22,15 @@ class RequestPathTest {
     }
 
     @Test
+    void acceptsCollapsedSlashesFromRoot() {
+        // ROOT's TUrl turns "//" into "/" before sending the open.
+        RequestPath p = RequestPath.parse(
+                "/root:/xrootd.aglt2.org:1094/atlaslocalgroupdisk/rucio/user/ivukotic/7d/9b/xcache.test.dat");
+        assertEquals(RequestPath.parse(README_PATH), p);
+        assertEquals(RequestPath.parse(README_PATH).cacheKey(), p.cacheKey());
+    }
+
+    @Test
     void defaultPortAndOpaque() {
         RequestPath p = RequestPath.parse("/roots://host.example//a/b?xrd.wantprot=gsi&x=1");
         assertEquals("roots", p.scheme());

@@ -32,8 +32,8 @@ spec:
         runAsUser: 10940
         runAsGroup: 10940
         runAsNonRoot: true
-        fsGroup: 10940
-        fsGroupChangePolicy: OnRootMismatch
+        # No fsGroup: it makes secret files group-readable (0440), and
+        # voms-proxy-init in the x509 sidecar rejects a key that is not 0400/0600.
       hostNetwork: true
       nodeSelector:
         xcache: slate01
@@ -68,8 +68,10 @@ spec:
                   -c,
                   "test -d /etc/CA/certificates && test -s /etc/proxy/x509up",
                 ]
+            # The proxy appears only after fetch-crl, which first sleeps up to
+            # 6 minutes (-r 360) and then takes a few minutes to download: allow 15.
             periodSeconds: 5
-            failureThreshold: 60
+            failureThreshold: 180
           resources:
             limits:
               memory: 512M
@@ -102,6 +104,12 @@ spec:
               value: /etc/proxy/x509up
             - name: X509_CERT_DIR
               value: /etc/grid-security/certificates
+            # Host certificate presented to GSI clients; its DN must match the
+            # node name clients connect to.
+            - name: IXCACHE_HOSTCERT
+              value: /etc/ixcache/host/hostcert.pem
+            - name: IXCACHE_HOSTKEY
+              value: /etc/ixcache/host/hostkey.pem
             - name: JDK_JAVA_OPTIONS
               value: "-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
           resources:
@@ -142,6 +150,9 @@ spec:
             - name: grid-security
               mountPath: /etc/grid-security
               readOnly: true
+            - name: host-cert
+              mountPath: /etc/ixcache/host
+              readOnly: true
             - name: tmp
               mountPath: /tmp
 
@@ -167,6 +178,19 @@ spec:
               - key: usercert
                 path: usercert.pem
             secretName: xcache-cert-secret
+        # Same certificate for the server itself. Secret files are owned by root,
+        # so the key must be world-readable for uid 10940; only ixcache runs in
+        # the container that mounts it.
+        - name: host-cert
+          secret:
+            secretName: xcache-cert-secret
+            items:
+              - key: usercert
+                path: hostcert.pem
+                mode: 0444
+              - key: userkey
+                path: hostkey.pem
+                mode: 0444
         - hostPath:
             path: /xcache/23
           name: xcache-data-0

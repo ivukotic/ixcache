@@ -36,4 +36,5 @@ WORKDIR /opt/ixcache
 VOLUME ["/data"]
 EXPOSE 1092
 
-ENTRYPOINT ["java", "-cp", "/opt/ixcache/lib/*", "org.atlasml.ixcache.Server"]
+# ixcache.jar first: it replaces a class in xrootd4j-gsi (see GSIRequestHandler).
+ENTRYPOINT ["java", "-cp", "/opt/ixcache/lib/ixcache.jar:/opt/ixcache/lib/*", "org.atlasml.ixcache.Server"]

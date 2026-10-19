@@ -150,6 +150,27 @@ replays them against different block sizes and read-ahead settings.
 server side or GSI is inadequate, fall back to a native XRootD front end with
 the Java engine behind it, and decide before Phase 2.
 
+**Status (2026-10-19): front end done; origin client and overhead measurement open.**
+The xrootd4j front end with GSI on port 1092 works with the XRootD 6.2.0 and 5.9.7
+clients and ROOT 6.40.04. That covers `xrdcp` copies, ROOT TTreeCache sparse reads,
+`readv` up to 1024 elements, and 256 reads outstanding on one connection. Data was
+served from a local directory (`IXCACHE_LOCAL_ROOT`); results were checked against
+a stock `xrootd` server. Findings:
+
+- xrootd4j 4.6.5 GSI needs two fixes, carried as a patched copy of
+  `GSIRequestHandler` that must precede xrootd4j-gsi on the classpath (checked at
+  startup). XRootD 6 clients refuse its random tags, which are not `[a-zA-Z0-9./]{8}`.
+  Separately, it signs any tag a client sends with the host key. To report upstream.
+- xrootd4j ignores the result of client chain validation; `GsiLoginHandler`
+  validates the chain itself.
+- canl must be 2.7.0 (BouncyCastle 1.68). The 2.1.1 that xrootd4j-gsi pins fails
+  chain validation with `IllegalAccessError`.
+- `pgread`: not needed. The server does not advertise `kXR_suppgrw`, and every
+  client tested uses plain `kXR_read`.
+- ROOT collapses `//` in URLs, so opens arrive as `/root:/origin/path`.
+- A `readv` element past EOF fails the whole request with `kXR_FSError`, as in the
+  reference server. Short elements make clients drop the connection.
+
 ### Phase 1 — Storage engine (in parallel with Phase 0)
 
 - Block store, metadata format, in-flight table, read planner, LRU with
