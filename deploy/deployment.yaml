@@ -1,16 +1,17 @@
 # Single-replica ixcache server.
 #
 # Prerequisites:
-#   - Service proxy in a Secret (renew it before it expires; the server reloads
-#     the file when it changes):
-#       kubectl -n ixcache create secret generic ixcache-proxy \
-#         --from-file=x509up=/tmp/x509up_u$(id -u)
-#   - IGTF CA certificates and CRLs at /etc/grid-security/certificates on the
-#     node, kept current by the host (osg-ca-certs / fetch-crl).
+#   - Service certificate and key in the xcache-cert-secret Secret (keys
+#     usercert, userkey). The x509 sidecar uses them to keep a fresh proxy at
+#     /etc/proxy/x509up in a shared in-memory volume; the server reloads the
+#     file when it changes. It also refreshes the image's IGTF CA certificates
+#     and CRLs and copies /etc/grid-security into a shared volume that ixcache
+#     mounts at /etc/grid-security.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ixcache
+  namespace: ixcache
   labels:
     app.kubernetes.io/name: ixcache
 spec:
@@ -27,13 +28,50 @@ spec:
         app.kubernetes.io/name: ixcache
     spec:
       securityContext:
-        runAsUser: 10000
-        runAsGroup: 10000
+        runAsUser: 10940
+        runAsGroup: 10940
         runAsNonRoot: true
-        fsGroup: 10000
+        fsGroup: 10940
         fsGroupChangePolicy: OnRootMismatch
       # Allow in-flight transfers to finish and metadata to be flushed.
       terminationGracePeriodSeconds: 120
+      # Native sidecar (Kubernetes 1.29+): keeps the proxy fresh for the pod's
+      # lifetime; ixcache starts only after the first proxy has been written.
+      initContainers:
+        - name: x509
+          restartPolicy: Always
+          # The updater needs root: fetch-crl writes the image's CA directory, and
+          # the proxy is chowned to xrootd (10940, the pod's user) for ixcache.
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+          command:
+            - /usr/local/sbin/run_x509_updater.sh
+          image: harbor.tempest.uchicago.edu/docker.io/ivukotic/atlas-xcache-heartbeats:2026.10.18
+          imagePullPolicy: Always
+          startupProbe:
+            exec:
+              command: [sh, -c, "test -d /etc/CA/certificates && test -s /etc/proxy/x509up"]
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:
+            limits:
+              memory: 512M
+              cpu: 500m
+            requests:
+              cpu: 100m
+              memory: 512M
+              ephemeral-storage: 600M
+          volumeMounts:
+            - mountPath: /etc/proxy/
+              name: x509-data
+            - mountPath: /etc/grid-certs/
+              name: x509-certs-volume
+              readOnly: true
+            - mountPath: /etc/CA
+              name: grid-security
+
       containers:
         - name: ixcache
           image: ivukotic/ixcache:latest
@@ -57,6 +95,7 @@ spec:
               memory: 32Gi
             limits:
               memory: 32Gi
+              cpu: "32"
           # Replace with HTTP health/readiness endpoints once they exist (Phase 3).
           startupProbe:
             tcpSocket:
@@ -80,25 +119,37 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            - name: proxy
+            - name: x509-data
               mountPath: /etc/proxy
               readOnly: true
-            - name: grid-certificates
-              mountPath: /etc/grid-security/certificates
+            - name: grid-security
+              mountPath: /etc/grid-security
               readOnly: true
             - name: tmp
               mountPath: /tmp
+
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: ixcache-data
-        - name: proxy
-          secret:
-            secretName: ixcache-proxy
-            defaultMode: 0440
-        - name: grid-certificates
-          hostPath:
-            path: /etc/grid-security/certificates
-            type: Directory
+        # CA certificates and CRLs, filled and refreshed by the x509 sidecar.
+        - name: grid-security
+          emptyDir:
+            sizeLimit: 200Mi
         - name: tmp
           emptyDir: {}
+
+        - name: x509-data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Mi
+        - name: x509-certs-volume
+          secret:
+            defaultMode: 420
+            items:
+              - key: userkey
+                mode: 256
+                path: userkey.pem
+              - key: usercert
+                path: usercert.pem
+            secretName: xcache-cert-secret

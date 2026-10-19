@@ -19,8 +19,8 @@ RUN ./mvnw -B -q -DskipTests package \
 # ---- runtime ----
 FROM eclipse-temurin:21-jre
 
-RUN groupadd --system --gid 10000 ixcache \
- && useradd --system --uid 10000 --gid ixcache --home-dir /opt/ixcache --shell /usr/sbin/nologin ixcache \
+RUN groupadd --system --gid 10940 ixcache \
+ && useradd --system --uid 10940 --gid ixcache --home-dir /opt/ixcache --shell /usr/sbin/nologin ixcache \
  && mkdir -p /data /etc/grid-security/certificates \
  && chown ixcache:ixcache /data
 
@@ -31,7 +31,7 @@ ENV IXCACHE_CACHE_DIR=/data \
     X509_CERT_DIR=/etc/grid-security/certificates \
     JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
 
-USER 10000:10000
+USER 10940:10940
 WORKDIR /opt/ixcache
 VOLUME ["/data"]
 EXPOSE 1094

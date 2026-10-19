@@ -38,6 +38,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: ixcache-data
+  namespace: ixcache
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: ixcache-local-nvme

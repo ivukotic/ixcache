@@ -5,6 +5,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: ixcache
+  namespace: ixcache
   labels:
     app.kubernetes.io/name: ixcache
 spec:
