@@ -104,12 +104,12 @@ spec:
               value: /etc/proxy/x509up
             - name: X509_CERT_DIR
               value: /etc/grid-security/certificates
-            # Host certificate presented to GSI clients; its DN must match the
-            # node name clients connect to.
-            - name: IXCACHE_HOSTCERT
-              value: /etc/ixcache/host/hostcert.pem
-            - name: IXCACHE_HOSTKEY
-              value: /etc/ixcache/host/hostkey.pem
+            # No client authentication, like the native XCaches. For "gsi", also
+            # mount a host certificate for this node and set IXCACHE_HOSTCERT and
+            # IXCACHE_HOSTKEY to its files (the robot certificate will not do:
+            # clients require the server certificate to match the host name).
+            - name: IXCACHE_AUTH
+              value: none
             - name: JDK_JAVA_OPTIONS
               value: "-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
           resources:
@@ -150,9 +150,6 @@ spec:
             - name: grid-security
               mountPath: /etc/grid-security
               readOnly: true
-            - name: host-cert
-              mountPath: /etc/ixcache/host
-              readOnly: true
             - name: tmp
               mountPath: /tmp
 
@@ -178,19 +175,6 @@ spec:
               - key: usercert
                 path: usercert.pem
             secretName: xcache-cert-secret
-        # Same certificate for the server itself. Secret files are owned by root,
-        # so the key must be world-readable for uid 10940; only ixcache runs in
-        # the container that mounts it.
-        - name: host-cert
-          secret:
-            secretName: xcache-cert-secret
-            items:
-              - key: usercert
-                path: hostcert.pem
-                mode: 0444
-              - key: userkey
-                path: hostkey.pem
-                mode: 0444
         - hostPath:
             path: /xcache/23
           name: xcache-data-0

@@ -6,6 +6,7 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_isServer;
 
 import java.io.FileNotFoundException;
 import java.net.InetSocketAddress;
+import java.util.Locale;
 import java.util.Properties;
 
 import eu.emi.security.authn.x509.X509CertChainValidator;
@@ -33,8 +34,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The client-facing XRootD server: handshake, login, mandatory GSI
- * authentication, then file requests handled by {@link ClientHandler}.
+ * The client-facing XRootD server: handshake, login with no authentication or
+ * mandatory GSI ({@link ServerConfig.Auth}), then file requests handled by
+ * {@link ClientHandler}.
  *
  * <p>No TLS and no request signing. The server does not advertise
  * {@code kXR_pgread} support, so clients use plain {@code kXR_read}.
@@ -50,16 +52,20 @@ public final class XrootdServer implements AutoCloseable {
     private XrootdServer() {
     }
 
+    /** Adds the login (and authentication) handler for one connection. */
+    @FunctionalInterface
+    private interface LoginStage {
+        void add(ChannelPipeline p, TLSSessionInfo tls, SigningPolicy signing);
+    }
+
     /** Binds {@code cfg.port()} and starts accepting clients. */
     public static XrootdServer start(ServerConfig cfg, Backend backend)
             throws FileNotFoundException, InterruptedException {
-        checkPatchedGsi();
-        Properties gsiProps = gsiProperties(cfg);
-        AuthenticationFactory gsi = new GSIAuthenticationFactory(gsiProps);
-        X509CertChainValidator validator =
-                new CertChainValidatorProvider(gsiProps).getCertChainValidator();
-        // Load the host credential now so a bad certificate fails at startup, not at first login.
-        gsi.createHandler(null).getProtocol();
+        LoginStage login = switch (cfg.auth()) {
+            case NONE -> (p, tls, signing) -> p.addLast(SESSION_HANDLER, new AnonymousLoginHandler());
+            case GSI -> gsiLogin(cfg);
+        };
+        log.info("client authentication: {}", cfg.auth().name().toLowerCase(Locale.ROOT));
 
         XrootdServer s = new XrootdServer();
         try {
@@ -71,7 +77,7 @@ public final class XrootdServer implements AutoCloseable {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            initPipeline(ch.pipeline(), gsi, validator, backend);
+                            initPipeline(ch.pipeline(), login, backend);
                         }
                     })
                     .bind(new InetSocketAddress(cfg.port())).sync().channel();
@@ -101,18 +107,30 @@ public final class XrootdServer implements AutoCloseable {
                 + "; put the ixcache jar before xrootd4j-gsi on the classpath");
     }
 
-    private static void initPipeline(ChannelPipeline p, AuthenticationFactory gsi,
-            X509CertChainValidator validator, Backend backend) {
-        // Per-connection state: both handlers must share one TLSSessionInfo.
+    /** Mandatory GSI; loads the host credential now so a bad one fails at startup. */
+    private static LoginStage gsiLogin(ServerConfig cfg) throws FileNotFoundException {
+        checkPatchedGsi();
+        Properties gsiProps = gsiProperties(cfg);
+        AuthenticationFactory gsi = new GSIAuthenticationFactory(gsiProps);
+        X509CertChainValidator validator =
+                new CertChainValidatorProvider(gsiProps).getCertChainValidator();
+        gsi.createHandler(null).getProtocol();
+
+        return (p, tls, signing) -> {
+            XrootdSessionHandler session = new XrootdSessionHandler();
+            session.setTlsSessionInfo(tls);
+            session.setSigningPolicy(signing);
+            GsiLoginHandler login = new GsiLoginHandler(gsi, validator);
+            login.setSessionHandler(session);
+            session.add(login);
+            p.addLast(SESSION_HANDLER, session);
+        };
+    }
+
+    private static void initPipeline(ChannelPipeline p, LoginStage login, Backend backend) {
+        // Per-connection state: the session and client handlers share one TLSSessionInfo.
         TLSSessionInfo tls = new TLSSessionInfo(new ServerProtocolFlags(kXR_isServer));
         SigningPolicy signing = new SigningPolicy();
-
-        XrootdSessionHandler session = new XrootdSessionHandler();
-        session.setTlsSessionInfo(tls);
-        session.setSigningPolicy(signing);
-        GsiLoginHandler login = new GsiLoginHandler(gsi, validator);
-        login.setSessionHandler(session);
-        session.add(login);
 
         ClientHandler client = new ClientHandler(backend);
         client.setTlsSessionInfo(tls);
@@ -121,7 +139,7 @@ public final class XrootdServer implements AutoCloseable {
         p.addLast("handshake", new XrootdHandshakeHandler(DATA_SERVER));
         p.addLast("encoder", new XrootdEncoder());
         p.addLast("decoder", new XrootdDecoder());
-        p.addLast(SESSION_HANDLER, session);
+        login.add(p, tls, signing);
         p.addLast("client", client);
     }
 

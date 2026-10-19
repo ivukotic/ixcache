@@ -19,7 +19,7 @@ with local NVMe. Requirements are in `README.md`:
 | Networking | Netty for client-facing server and origin client |
 | Client-facing protocol | xrootd4j server-side codec + GSI plugin, confirmed by Phase 0 spike |
 | Origin auth | One service proxy read from `X509_USER_PROXY`; reloaded when the file changes |
-| Client auth | Mandatory GSI at the cache; any valid certificate/proxy is accepted (no VOMS or other authorization check). Identity is used only for logging; no per-user origin identity |
+| Client auth | `IXCACHE_AUTH`: `none` (default, as native XCache: no client authentication) or `gsi` (mandatory GSI; any valid certificate/proxy is accepted, no VOMS or other authorization check; needs a host certificate matching the name clients use). Identity is used only for logging; no per-user origin identity |
 | Tokens | Out of scope for v1; keep the auth layer pluggable so they can be added |
 | Origin selection | Taken from the embedded URL (`root://cache//root://origin//path`); no replica discovery or failover in v1 |
 | Cache key | Rucio `scope:name` when the path matches the deterministic Rucio layout, otherwise origin host, port and path |
@@ -151,7 +151,7 @@ server side or GSI is inadequate, fall back to a native XRootD front end with
 the Java engine behind it, and decide before Phase 2.
 
 **Status (2026-10-19): front end done; origin client and overhead measurement open.**
-The xrootd4j front end with GSI on port 1092 works with the XRootD 6.2.0 and 5.9.7
+The xrootd4j front end on port 1092, with GSI or no authentication, works with the XRootD 6.2.0 and 5.9.7
 clients and ROOT 6.40.04. That covers `xrdcp` copies, ROOT TTreeCache sparse reads,
 `readv` up to 1024 elements, and 256 reads outstanding on one connection. Data was
 served from a local directory (`IXCACHE_LOCAL_ROOT`); results were checked against
@@ -224,7 +224,7 @@ a stock `xrootd` server. Findings:
 - Disk use stays within the watermarks, and restart recovers a consistent cache.
 - 1,000 concurrent clients sustained without errors.
 - Telemetry records match schema v1; telemetry outage does not affect reads.
-- Clients without a valid GSI credential are rejected.
+- With `IXCACHE_AUTH=gsi`, clients without a valid GSI credential are rejected; with `none`, clients restricted to GSI (`XrdSecPROTOCOL=gsi`) still work.
 - The service proxy never appears in logs, metrics or telemetry.
 
 ## Out of scope for v1
