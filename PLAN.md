@@ -15,14 +15,14 @@ with local NVMe. Requirements are in `README.md`:
 
 | Topic | Decision |
 | --- | --- |
-| Language / runtime | Java 25 (LTS), Maven (matches xrootd4j/dCache) |
+| Language / runtime | Java 21+ (LTS; move to 25 when the build environment has it), Maven wrapper (matches xrootd4j/dCache) |
 | Networking | Netty for client-facing server and origin client |
 | Client-facing protocol | xrootd4j server-side codec + GSI plugin, confirmed by Phase 0 spike |
 | Origin auth | One service proxy read from `X509_USER_PROXY`; reloaded when the file changes |
 | Client auth | Mandatory GSI at the cache; any valid certificate/proxy is accepted (no VOMS or other authorization check). Identity is used only for logging; no per-user origin identity |
 | Tokens | Out of scope for v1; keep the auth layer pluggable so they can be added |
 | Origin selection | Taken from the embedded URL (`root://cache//root://origin//path`); no replica discovery or failover in v1 |
-| Cache key | Rucio `scope:name` when the path matches the deterministic Rucio layout, otherwise origin-stripped full path |
+| Cache key | Rucio `scope:name` when the path matches the deterministic Rucio layout, otherwise origin host, port and path |
 | Block size | Configurable, 64 kB default; tuned up to ~512 kB |
 | Eviction | File-level LRU between configurable high and low watermarks |
 | Data mutability | Origin files are immutable; no revalidation |
@@ -36,7 +36,8 @@ For paths of the form `.../rucio/<scope parts>/<xx>/<yy>/<name>`:
 2. Compute `md5("<scope>:<name>")` and check that its first two hex bytes equal
    `xx/yy`.
 3. If they match, the key is `scope:name`, shared across all origins.
-   Otherwise fall back to the full path without the origin prefix.
+   Otherwise fall back to origin host, port and path, so files that merely
+   share a path on different origins are never merged.
 
 The check prevents unrelated paths that only look like Rucio paths from being
 merged. Origin and full path are still kept per open so misses go to the origin

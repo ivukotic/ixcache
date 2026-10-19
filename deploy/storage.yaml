@@ -1,0 +1,46 @@
+# Node-local NVMe for the cache. The PersistentVolume's nodeAffinity pins the
+# pod to the node that holds the disk.
+#
+# Before applying, set:
+#   - spec.local.path   : mount point of the NVMe filesystem on the node
+#   - spec.capacity     : size of that filesystem
+#   - nodeAffinity value: name of the node (kubectl get nodes)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ixcache-local-nvme
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ixcache-nvme
+spec:
+  capacity:
+    storage: 7Ti
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ixcache-local-nvme
+  volumeMode: Filesystem
+  local:
+    path: /mnt/nvme/ixcache
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [CHANGE-ME-node-name]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ixcache-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ixcache-local-nvme
+  resources:
+    requests:
+      storage: 7Ti

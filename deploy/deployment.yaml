@@ -1,0 +1,104 @@
+# Single-replica ixcache server.
+#
+# Prerequisites:
+#   - Service proxy in a Secret (renew it before it expires; the server reloads
+#     the file when it changes):
+#       kubectl -n ixcache create secret generic ixcache-proxy \
+#         --from-file=x509up=/tmp/x509up_u$(id -u)
+#   - IGTF CA certificates and CRLs at /etc/grid-security/certificates on the
+#     node, kept current by the host (osg-ca-certs / fetch-crl).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ixcache
+  labels:
+    app.kubernetes.io/name: ixcache
+spec:
+  replicas: 1
+  # The data volume is ReadWriteOnce on one node: stop the old pod first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ixcache
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ixcache
+    spec:
+      securityContext:
+        runAsUser: 10000
+        runAsGroup: 10000
+        runAsNonRoot: true
+        fsGroup: 10000
+        fsGroupChangePolicy: OnRootMismatch
+      # Allow in-flight transfers to finish and metadata to be flushed.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: ixcache
+          image: ivukotic/ixcache:latest
+          imagePullPolicy: Always
+          ports:
+            - name: xrootd
+              containerPort: 1094
+              protocol: TCP
+          env:
+            - name: IXCACHE_CACHE_DIR
+              value: /data
+            - name: X509_USER_PROXY
+              value: /etc/proxy/x509up
+            - name: X509_CERT_DIR
+              value: /etc/grid-security/certificates
+            - name: JDK_JAVA_OPTIONS
+              value: "-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
+          resources:
+            requests:
+              cpu: "16"
+              memory: 32Gi
+            limits:
+              memory: 32Gi
+          # Replace with HTTP health/readiness endpoints once they exist (Phase 3).
+          startupProbe:
+            tcpSocket:
+              port: xrootd
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: xrootd
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: xrootd
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: proxy
+              mountPath: /etc/proxy
+              readOnly: true
+            - name: grid-certificates
+              mountPath: /etc/grid-security/certificates
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ixcache-data
+        - name: proxy
+          secret:
+            secretName: ixcache-proxy
+            defaultMode: 0440
+        - name: grid-certificates
+          hostPath:
+            path: /etc/grid-security/certificates
+            type: Directory
+        - name: tmp
+          emptyDir: {}

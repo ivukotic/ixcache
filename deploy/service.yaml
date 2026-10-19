@@ -1,0 +1,19 @@
+# Clients connect to root://<external-ip>:1094//root://origin//path.
+# externalTrafficPolicy: Local keeps the client's source address and avoids an
+# extra hop between nodes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ixcache
+  labels:
+    app.kubernetes.io/name: ixcache
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: ixcache
+  ports:
+    - name: xrootd
+      port: 1094
+      targetPort: xrootd
+      protocol: TCP
