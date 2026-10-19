@@ -1,18 +1,15 @@
 package org.atlasml.ixcache;
 
-import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_Unsupported;
-
-import java.util.concurrent.CompletableFuture;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.atlasml.ixcache.origin.OriginBackend;
+import org.atlasml.ixcache.origin.OriginConfig;
 import org.atlasml.ixcache.server.Backend;
-import org.atlasml.ixcache.server.FileInfo;
 import org.atlasml.ixcache.server.LocalBackend;
-import org.atlasml.ixcache.server.OpenFile;
 import org.atlasml.ixcache.server.ServerConfig;
 import org.atlasml.ixcache.server.XrootdServer;
-import org.dcache.xrootd.core.XrootdException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,42 +22,34 @@ public final class Server {
     }
 
     public static void main(String[] args) throws Exception {
-        ServerConfig cfg = ServerConfig.fromEnv(System.getenv());
+        Map<String, String> env = System.getenv();
+        ServerConfig cfg = ServerConfig.fromEnv(env);
         ExecutorService io = Executors.newVirtualThreadPerTaskExecutor();
 
         Backend backend;
+        AutoCloseable closeBackend = () -> { };
         if (cfg.localRoot().isPresent()) {
             log.warn("serving local files from {} instead of origins", cfg.localRoot().get());
             backend = new LocalBackend(cfg.localRoot().get(), io);
         } else {
-            backend = new NoOrigin();
+            // Pass-through to origins; the cache is not in the read path yet.
+            OriginBackend origins = new OriginBackend(OriginConfig.fromEnv(env));
+            backend = origins;
+            closeBackend = origins;
         }
 
         XrootdServer server = XrootdServer.start(cfg, backend);
+        AutoCloseable onExit = closeBackend;
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("shutting down");
             server.close();
+            try {
+                onExit.close();
+            } catch (Exception e) {
+                log.warn("closing origin connections failed", e);
+            }
             io.close();
         }, "ixcache-shutdown"));
         Thread.currentThread().join();
-    }
-
-    /** Placeholder until the origin client exists: every open and stat fails. */
-    private static final class NoOrigin implements Backend {
-
-        @Override
-        public CompletableFuture<OpenFile> open(String path, String opaque) {
-            return notYet();
-        }
-
-        @Override
-        public CompletableFuture<FileInfo> stat(String path, String opaque) {
-            return notYet();
-        }
-
-        private static <T> CompletableFuture<T> notYet() {
-            return CompletableFuture.failedFuture(
-                    new XrootdException(kXR_Unsupported, "origin access is not implemented yet"));
-        }
     }
 }

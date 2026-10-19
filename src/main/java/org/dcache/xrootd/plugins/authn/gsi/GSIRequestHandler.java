@@ -21,6 +21,8 @@
  *   - signRtagChallenge() signs only a well-formed peer tag. The tag is signed
  *     with the host key using raw RSA, so signing arbitrary peer data would let
  *     a client obtain host-key signatures over values of its choosing.
+ *   - validateDigests() also accepts sha256, the only digest XRootD 5.9+ servers
+ *     offer; without it the GSI client cannot authenticate to them.
  */
 package org.dcache.xrootd.plugins.authn.gsi;
 
@@ -174,6 +176,13 @@ public abstract class GSIRequestHandler {
 
         return challenge;
     }
+
+    /**
+     * [ixcache] Digests accepted from a peer. The negotiated digest is only echoed
+     * back (it would matter for request signing, which is not used), and current
+     * XRootD servers offer only sha256.
+     */
+    public static final String ACCEPTED_DIGESTS = "sha256:" + SUPPORTED_DIGESTS;
 
     /** [ixcache] Characters of a GSI random tag. */
     public static final String CHALLENGE_ALPHABET =
@@ -516,7 +525,7 @@ public abstract class GSIRequestHandler {
         LOGGER.debug("Validating cipher digests.");
         String selectedDigest = null;
         for (String digest : digests) {
-            if (SUPPORTED_DIGESTS.contains(digest)) {
+            if (ACCEPTED_DIGESTS.contains(digest)) {
                 selectedDigest = digest;
                 break;
             }

@@ -19,6 +19,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.atlasml.ixcache.gsi.GsiProperties;
 import org.dcache.xrootd.core.XrootdDecoder;
 import org.dcache.xrootd.core.XrootdEncoder;
 import org.dcache.xrootd.core.XrootdHandshakeHandler;
@@ -110,7 +111,7 @@ public final class XrootdServer implements AutoCloseable {
     /** Mandatory GSI; loads the host credential now so a bad one fails at startup. */
     private static LoginStage gsiLogin(ServerConfig cfg) throws FileNotFoundException {
         checkPatchedGsi();
-        Properties gsiProps = gsiProperties(cfg);
+        Properties gsiProps = GsiProperties.of(cfg.caDir(), cfg.hostCert(), cfg.hostKey());
         AuthenticationFactory gsi = new GSIAuthenticationFactory(gsiProps);
         X509CertChainValidator validator =
                 new CertChainValidatorProvider(gsiProps).getCertChainValidator();
@@ -141,26 +142,6 @@ public final class XrootdServer implements AutoCloseable {
         p.addLast("decoder", new XrootdDecoder());
         login.add(p, tls, signing);
         p.addLast("client", client);
-    }
-
-    private static Properties gsiProperties(ServerConfig cfg) {
-        Properties p = new Properties();
-        p.setProperty("xrootd.gsi.hostcert.cert", cfg.hostCert().toString());
-        p.setProperty("xrootd.gsi.hostcert.key", cfg.hostKey().toString());
-        p.setProperty("xrootd.gsi.hostcert.refresh", "1");
-        p.setProperty("xrootd.gsi.hostcert.refresh.unit", "HOURS");
-        p.setProperty("xrootd.gsi.hostcert.verify", "true");
-        p.setProperty("xrootd.gsi.ca.path", cfg.caDir().toString());
-        p.setProperty("xrootd.gsi.ca.refresh", "1");
-        p.setProperty("xrootd.gsi.ca.refresh.unit", "HOURS");
-        p.setProperty("xrootd.gsi.ca.namespace-mode", "EUGRIDPMA_GLOBUS");
-        p.setProperty("xrootd.gsi.ca.crl-mode", "IF_VALID");
-        p.setProperty("xrootd.gsi.ca.ocsp-mode", "IGNORE");
-        // Client-side (TPC) settings are unused but must parse.
-        p.setProperty("xrootd.gsi.tpc.cred.refresh", "1");
-        p.setProperty("xrootd.gsi.tpc.cred.refresh.unit", "HOURS");
-        p.setProperty("xrootd.gsi.tpc.cred.verify", "false");
-        return p;
     }
 
     public InetSocketAddress localAddress() {
