@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
+
 import org.dcache.xrootd.plugins.authn.gsi.GSIRequestHandler;
 import org.junit.jupiter.api.Test;
 
@@ -24,13 +26,22 @@ class GsiChallengeTest {
     }
 
     @Test
-    void rejectsTagsAClientCouldUseAsASigningOracle() {
+    void checksGeneratedTagFormat() {
         assertTrue(GSIRequestHandler.isWellFormedChallenge("aZ09./xY"));
         assertFalse(GSIRequestHandler.isWellFormedChallenge(null));
         assertFalse(GSIRequestHandler.isWellFormedChallenge("short"));
         assertFalse(GSIRequestHandler.isWellFormedChallenge("aZ09./xY0"));
         assertFalse(GSIRequestHandler.isWellFormedChallenge("aZ09./x\u0001"));
-        // A PKCS#1 DigestInfo prefix is binary and at least 34 bytes long.
-        assertFalse(GSIRequestHandler.isWellFormedChallenge("0010\r\n\u0006\t`\u0086H\u0001e\u0003\u0004\u0002\u0001"));
+    }
+
+    @Test
+    void signsOnlyTagsThatCannotBeADigestInfo() {
+        // Stock xrootd4j peers (dCache) send 8 arbitrary ASCII bytes: must be signed.
+        assertTrue(GSIRequestHandler.isSafeToSign(new byte[] {1, 31, 64, 126, 0, 9, 10, 13}));
+        assertTrue(GSIRequestHandler.isSafeToSign("aZ09./xY".getBytes(StandardCharsets.US_ASCII)));
+        assertFalse(GSIRequestHandler.isSafeToSign(null));
+        assertFalse(GSIRequestHandler.isSafeToSign(new byte[7]));
+        // A SHA-256 DigestInfo is 51 bytes.
+        assertFalse(GSIRequestHandler.isSafeToSign(new byte[51]));
     }
 }

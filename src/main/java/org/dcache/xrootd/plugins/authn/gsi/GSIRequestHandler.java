@@ -18,9 +18,9 @@
  * the xrootd4j-gsi jar, so it must come first on the classpath. Changes:
  *   - generateChallengeString() draws from [a-zA-Z0-9./], as XrdSutRndm does.
  *     XRootD 6 clients refuse to sign any other random tag.
- *   - signRtagChallenge() signs only a well-formed peer tag. The tag is signed
- *     with the host key using raw RSA, so signing arbitrary peer data would let
- *     a client obtain host-key signatures over values of its choosing.
+ *   - signRtagChallenge() signs only an 8-byte peer tag. The tag is signed with
+ *     our key using raw RSA, so signing arbitrary peer data would let a peer
+ *     obtain signatures over values of its choosing.
  *   - validateDigests() also accepts sha256, the only digest XRootD 5.9+ servers
  *     offer; without it the GSI client cannot authenticate to them.
  */
@@ -192,6 +192,19 @@ public abstract class GSIRequestHandler {
      * [ixcache] True if {@code tag} is a well formed GSI random tag: exactly
      * CHALLENGE_BYTES characters from CHALLENGE_ALPHABET (XrdSecgsiRtagIsValid).
      */
+    /**
+     * [ixcache] True if a peer's random tag may be signed with our key. The tag is
+     * signed with raw RSA (PKCS#1 v1.5, no digest), so a signature over a peer
+     * value that is a DigestInfo would be a valid signature on a message of the
+     * peer's choosing. Every DigestInfo is at least 34 bytes, so requiring exactly
+     * CHALLENGE_BYTES excludes them (the rule XRootD applies to every peer). The
+     * character set is not checked: stock xrootd4j peers (e.g. dCache doors)
+     * send tags outside [a-zA-Z0-9./].
+     */
+    public static boolean isSafeToSign(byte[] tag) {
+        return tag != null && tag.length == CHALLENGE_BYTES;
+    }
+
     public static boolean isWellFormedChallenge(String tag) {
         if (tag == null || tag.length() != CHALLENGE_BYTES) {
             return false;
@@ -620,11 +633,12 @@ public abstract class GSIRequestHandler {
           throws BadPaddingException, IllegalBlockSizeException,
           IOException {
         StringBucket rtagBucket = (StringBucket) nestedBuckets.get(kXRS_rtag);
-        // [ixcache] Never sign peer-chosen data with the host key.
-        if (rtagBucket == null || !isWellFormedChallenge(rtagBucket.getContent())) {
-            throw new IOException("malformed random tag: refusing to sign");
+        // [ixcache] Never sign peer-chosen data that could pass for a digest.
+        byte[] rtag = rtagBucket == null ? null : rtagBucket.getContent().getBytes(US_ASCII);
+        if (!isSafeToSign(rtag)) {
+            throw new IOException("random tag of " + (rtag == null ? 0 : rtag.length)
+                  + " bytes: refusing to sign");
         }
-        byte[] rtag = rtagBucket.getContent().getBytes(US_ASCII);
         LOGGER.debug("Signing sender's random challenge tag of length {}.",
               rtag.length);
         return rsaSession.encrypt(rtag);
