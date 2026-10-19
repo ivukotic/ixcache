@@ -16,6 +16,7 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_wait;
 import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_waitresp;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -374,6 +375,11 @@ final class OriginConnection {
 
     boolean isActive() {
         return channel.isActive();
+    }
+
+    /** The address actually connected to (one of possibly several behind the host name). */
+    InetSocketAddress remoteAddress() {
+        return (InetSocketAddress) channel.remoteAddress();
     }
 
     /** Requests waiting for a reply. */

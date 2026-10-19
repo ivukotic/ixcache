@@ -172,7 +172,13 @@ comparison from the cluster against a real WAN origin. Findings:
   validates the chain itself.
 - The origin client reuses xrootd4j's client-side GSI handler (4.9+ exchange),
   with the service proxy passed as its "delegated" proxy. The proxy is re-read
-  when its file changes.
+  when its file changes. Its server check is replaced: xrootd4j ignores the chain
+  validation result there too, and accepts only the URL's host name. ixcache
+  also accepts the reverse-DNS name of the address connected to, as XRootD
+  clients do; `xrootd.aglt2.org` is an alias over six dCache doors, each with a
+  certificate for its own name.
+- dCache origins send random tags outside `[a-zA-Z0-9./]`, so a peer's tag is
+  signed if it is 8 bytes long, whatever its characters (XRootD's own rule).
 - canl must be 2.7.0 (BouncyCastle 1.68). The 2.1.1 that xrootd4j-gsi pins fails
   chain validation with `IllegalAccessError`.
 - `pgread`: not needed. The server does not advertise `kXR_suppgrw`, and every
