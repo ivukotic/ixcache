@@ -98,13 +98,11 @@ spec:
               containerPort: 1092
               protocol: TCP
           env:
-            # A subdirectory: /data holds 1.4 TB of older data that ixcache must not
-            # count or touch. The size is explicit for the same reason: the default
-            # (the whole file system) would ignore what is already on the disk.
+            # A subdirectory of the disk, so nothing else placed on it is ever
+            # counted or touched. The size defaults to the whole file system; set
+            # IXCACHE_CACHE_SIZE if the disk is shared.
             - name: IXCACHE_CACHE_DIR
               value: /data/ixcache
-            - name: IXCACHE_CACHE_SIZE
-              value: 100G
             - name: X509_USER_PROXY
               value: /etc/proxy/x509up
             - name: X509_CERT_DIR
