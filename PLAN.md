@@ -203,6 +203,17 @@ comparison from the cluster against a real WAN origin. Findings:
   origin URLs for the same `scope:name` sharing one entry, EOF, and origin
   errors.
 
+**Status (2026-10-20): done.** `CachingBackend` puts the cache between the front
+end and the origin client. A file the cache knows opens without contacting the
+origin; the origin file is opened on the first miss, so a fully cached file never
+touches it. Settings: `IXCACHE_CACHE_DIR`, `IXCACHE_CACHE_SIZE` (default: file
+system size), `IXCACHE_HIGH_WM`, `IXCACHE_LOW_WM`, `IXCACHE_BLOCK_SIZE`. The
+integration tests run the whole path over TCP in one JVM. In Docker, `xrdcp`, the
+XRootD 6.2.0 client and ROOT read correctly through the cache from a GSI origin,
+then again with the origin stopped, and again after an ixcache restart. Known
+gaps: modification time is not stored, so opens and stats served from the cache
+report 0; only one cache directory is used (the pod's second disk is not).
+
 ### Phase 3 — Operations
 
 - Configuration validation, structured logging, telemetry, request-pattern

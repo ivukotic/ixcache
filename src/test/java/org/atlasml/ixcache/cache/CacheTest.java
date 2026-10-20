@@ -202,6 +202,28 @@ class CacheTest {
     }
 
     @Test
+    void recoveryLeavesForeignFilesAlone() throws Exception {
+        // Files another program keeps next to (or under) the cache directory.
+        Path root = cfg().root();
+        Files.createDirectories(root.resolve("data/ab"));
+        Files.createDirectories(root.resolve("cd"));
+        List<Path> foreign = List.of(
+                root.resolve("data/ab/file.data"),
+                root.resolve("data/ab/file.tmp"),
+                root.resolve("cd/x.data"),
+                root.resolve("cd/" + "0".repeat(64) + ".data"), // right name, wrong directory
+                root.resolve("notes.tmp"));
+        for (Path p : foreign) {
+            Files.writeString(p, "keep me");
+        }
+        Cache c = open(cfg());
+        assertEquals(0, c.usedBytes());
+        for (Path p : foreign) {
+            assertTrue(Files.exists(p), p.toString());
+        }
+    }
+
+    @Test
     void entriesSurviveRestart() throws Exception {
         Cache c = open(cfg());
         FakeOrigin origin = new FakeOrigin(10 * MB);

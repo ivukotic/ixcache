@@ -18,6 +18,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -248,7 +250,7 @@ public final class Cache implements Closeable {
         int kept = 0;
         int dropped = 0;
         try (Stream<Path> files = Files.walk(cfg.root(), 2)) {
-            for (Path p : files.filter(Files::isRegularFile).toList()) {
+            for (Path p : files.filter(Files::isRegularFile).filter(Cache::isCacheFile).toList()) {
                 String name = p.getFileName().toString();
                 if (name.endsWith(".tmp")) {
                     Files.deleteIfExists(p);
@@ -268,6 +270,19 @@ public final class Cache implements Closeable {
             }
         }
         log.info("recovered {} cached files ({} bytes), dropped {}", kept, used.get(), dropped);
+    }
+
+    private static final Pattern CACHE_FILE = Pattern.compile("([0-9a-f]{2})[0-9a-f]{62}\\.(data|meta|meta\\.tmp)");
+
+    /**
+     * True for files the cache creates ({@code <h0h1>/<sha256>.data|.meta|.meta.tmp}).
+     * Recovery deletes stray files, so it must never touch anything else that
+     * happens to share the directory.
+     */
+    private static boolean isCacheFile(Path p) {
+        Matcher m = CACHE_FILE.matcher(p.getFileName().toString());
+        Path parent = p.getParent();
+        return m.matches() && parent != null && parent.getFileName().toString().equals(m.group(1));
     }
 
     private boolean recoverEntry(Path metaPath) throws IOException {

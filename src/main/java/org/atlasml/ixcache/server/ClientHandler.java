@@ -13,6 +13,7 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_ServerError;
 import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_readable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -254,7 +255,8 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
     }
 
     private void fail(XrootdRequest msg, Throwable err) {
-        while (err instanceof CompletionException && err.getCause() != null) {
+        while ((err instanceof CompletionException || err instanceof UncheckedIOException)
+                && err.getCause() != null) {
             err = err.getCause();
         }
         // Messages for I/O errors are generic: they could name paths on this host.

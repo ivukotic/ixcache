@@ -1,12 +1,17 @@
 package org.atlasml.ixcache;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import org.atlasml.ixcache.cache.Cache;
+import org.atlasml.ixcache.cache.CacheConfig;
 import org.atlasml.ixcache.origin.OriginBackend;
 import org.atlasml.ixcache.origin.OriginConfig;
 import org.atlasml.ixcache.server.Backend;
+import org.atlasml.ixcache.server.CachingBackend;
 import org.atlasml.ixcache.server.LocalBackend;
 import org.atlasml.ixcache.server.ServerConfig;
 import org.atlasml.ixcache.server.XrootdServer;
@@ -27,26 +32,38 @@ public final class Server {
         ExecutorService io = Executors.newVirtualThreadPerTaskExecutor();
 
         Backend backend;
-        AutoCloseable closeBackend = () -> { };
+        List<AutoCloseable> onExit = new ArrayList<>();
         if (cfg.localRoot().isPresent()) {
             log.warn("serving local files from {} instead of origins", cfg.localRoot().get());
             backend = new LocalBackend(cfg.localRoot().get(), io);
         } else {
-            // Pass-through to origins; the cache is not in the read path yet.
             OriginBackend origins = new OriginBackend(OriginConfig.fromEnv(env));
+            onExit.add(origins);
             backend = origins;
-            closeBackend = origins;
+        }
+        String cacheDir = env.get("IXCACHE_CACHE_DIR");
+        if (cacheDir != null && !cacheDir.isBlank()) {
+            CacheConfig cc = CacheConfig.fromEnv(env);
+            Cache cache = Cache.open(cc);
+            onExit.add(0, cache); // flush metadata before origin connections go
+            log.info("cache at {}: {} bytes, watermarks {}/{}, block size {}, {} bytes in use",
+                    cc.root(), cc.capacityBytes(), cc.lowWatermark(), cc.highWatermark(),
+                    cc.blockSize(), cache.usedBytes());
+            backend = new CachingBackend(cache, backend, io);
+        } else {
+            log.warn("IXCACHE_CACHE_DIR is not set: passing reads through without caching");
         }
 
         XrootdServer server = XrootdServer.start(cfg, backend);
-        AutoCloseable onExit = closeBackend;
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("shutting down");
             server.close();
-            try {
-                onExit.close();
-            } catch (Exception e) {
-                log.warn("closing origin connections failed", e);
+            for (AutoCloseable c : onExit) {
+                try {
+                    c.close();
+                } catch (Exception e) {
+                    log.warn("closing {} failed", c, e);
+                }
             }
             io.close();
         }, "ixcache-shutdown"));
