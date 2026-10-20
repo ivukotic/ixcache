@@ -105,6 +105,10 @@ public final class Cache implements Closeable {
         return used.get();
     }
 
+    public CacheConfig config() {
+        return cfg;
+    }
+
     /**
      * Opens {@code key} for reading, creating an empty entry if needed.
      *

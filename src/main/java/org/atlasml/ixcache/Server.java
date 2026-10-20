@@ -8,6 +8,7 @@ import java.util.concurrent.Executors;
 
 import org.atlasml.ixcache.cache.Cache;
 import org.atlasml.ixcache.cache.CacheConfig;
+import org.atlasml.ixcache.cache.MultiCache;
 import org.atlasml.ixcache.origin.OriginBackend;
 import org.atlasml.ixcache.origin.OriginConfig;
 import org.atlasml.ixcache.server.Backend;
@@ -43,12 +44,16 @@ public final class Server {
         }
         String cacheDir = env.get("IXCACHE_CACHE_DIR");
         if (cacheDir != null && !cacheDir.isBlank()) {
-            CacheConfig cc = CacheConfig.fromEnv(env);
-            Cache cache = Cache.open(cc);
+            MultiCache cache = MultiCache.open(CacheConfig.fromEnv(env));
             onExit.add(0, cache); // flush metadata before origin connections go
-            log.info("cache at {}: {} bytes, watermarks {}/{}, block size {}, {} bytes in use",
-                    cc.root(), cc.capacityBytes(), cc.lowWatermark(), cc.highWatermark(),
-                    cc.blockSize(), cache.usedBytes());
+            for (Cache disk : cache.disks()) {
+                CacheConfig cc = disk.config();
+                log.info("cache at {}: {} bytes, watermarks {}/{}, block size {}, {} bytes in use",
+                        cc.root(), cc.capacityBytes(), cc.lowWatermark(), cc.highWatermark(),
+                        cc.blockSize(), disk.usedBytes());
+            }
+            log.info("cache: {} directories, {} of {} bytes in use", cache.disks().size(),
+                    cache.usedBytes(), cache.capacityBytes());
             backend = new CachingBackend(cache, backend, io);
         } else {
             log.warn("IXCACHE_CACHE_DIR is not set: passing reads through without caching");

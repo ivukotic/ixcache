@@ -11,9 +11,9 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
-import org.atlasml.ixcache.cache.Cache;
 import org.atlasml.ixcache.cache.CacheHandle;
 import org.atlasml.ixcache.cache.CacheKey;
+import org.atlasml.ixcache.cache.MultiCache;
 import org.atlasml.ixcache.cache.Range;
 import org.atlasml.ixcache.path.RequestPath;
 import org.slf4j.Logger;
@@ -33,14 +33,14 @@ public final class CachingBackend implements Backend {
 
     private static final Logger log = LoggerFactory.getLogger(CachingBackend.class);
 
-    private final Cache cache;
+    private final MultiCache cache;
     private final Backend origin;
     private final Executor blocking;
 
     /**
-     * @param blocking runs {@link Cache#acquire}, which may wait for a closing entry
+     * @param blocking runs {@link MultiCache#acquire}, which may wait for a closing entry
      */
-    public CachingBackend(Cache cache, Backend origin, Executor blocking) {
+    public CachingBackend(MultiCache cache, Backend origin, Executor blocking) {
         this.cache = cache;
         this.origin = origin;
         this.blocking = blocking;

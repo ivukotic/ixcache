@@ -3,7 +3,9 @@ package org.atlasml.ixcache.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
@@ -27,12 +29,14 @@ class CacheConfigTest {
 
     @Test
     void readsEnvironment() throws Exception {
-        CacheConfig c = CacheConfig.fromEnv(Map.of(
+        List<CacheConfig> cs = CacheConfig.fromEnv(Map.of(
                 "IXCACHE_CACHE_DIR", dir.resolve("c").toString(),
                 "IXCACHE_CACHE_SIZE", "10G",
                 "IXCACHE_HIGH_WM", "0.8",
                 "IXCACHE_LOW_WM", "0.7",
                 "IXCACHE_BLOCK_SIZE", "256k"));
+        assertEquals(1, cs.size());
+        CacheConfig c = cs.get(0);
         assertEquals(10L << 30, c.capacityBytes());
         assertEquals(0.8, c.highWatermark());
         assertEquals(0.7, c.lowWatermark());
@@ -41,8 +45,30 @@ class CacheConfigTest {
 
     @Test
     void defaultsToTheFileSystemSize() throws Exception {
-        CacheConfig c = CacheConfig.fromEnv(Map.of("IXCACHE_CACHE_DIR", dir.toString()));
-        assertEquals(java.nio.file.Files.getFileStore(dir).getTotalSpace(), c.capacityBytes());
+        CacheConfig c = CacheConfig.fromEnv(Map.of("IXCACHE_CACHE_DIR", dir.toString())).get(0);
+        assertEquals(Files.getFileStore(dir).getTotalSpace(), c.capacityBytes());
         assertEquals(CacheConfig.DEFAULT_BLOCK_SIZE, c.blockSize());
+    }
+
+    @Test
+    void severalDirectories() throws Exception {
+        String dirs = dir.resolve("d1") + ", " + dir.resolve("d2") + ",,";
+        List<CacheConfig> cs = CacheConfig.fromEnv(Map.of("IXCACHE_CACHE_DIR", dirs, "IXCACHE_CACHE_SIZE", "1G"));
+        assertEquals(List.of(dir.resolve("d1"), dir.resolve("d2")), cs.stream().map(CacheConfig::root).toList());
+        cs.forEach(c -> assertEquals(1L << 30, c.capacityBytes()));
+    }
+
+    @Test
+    void directoriesSharingAFileSystemNeedAnExplicitSize() {
+        String dirs = dir.resolve("d1") + "," + dir.resolve("d2");
+        assertThrows(IllegalArgumentException.class, () -> CacheConfig.fromEnv(Map.of("IXCACHE_CACHE_DIR", dirs)));
+    }
+
+    @Test
+    void unusableDirectoryIsLeftOut() throws Exception {
+        Files.writeString(dir.resolve("afile"), "x");
+        String dirs = dir.resolve("afile").resolve("sub") + "," + dir.resolve("ok");
+        List<CacheConfig> cs = CacheConfig.fromEnv(Map.of("IXCACHE_CACHE_DIR", dirs, "IXCACHE_CACHE_SIZE", "1G"));
+        assertEquals(List.of(dir.resolve("ok")), cs.stream().map(CacheConfig::root).toList());
     }
 }

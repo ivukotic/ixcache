@@ -23,8 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import org.atlasml.ixcache.cache.Cache;
 import org.atlasml.ixcache.cache.CacheConfig;
+import org.atlasml.ixcache.cache.MultiCache;
 import org.atlasml.ixcache.cache.Range;
 import org.atlasml.ixcache.origin.OriginBackend;
 import org.atlasml.ixcache.origin.OriginConfig;
@@ -54,7 +54,7 @@ class CachingBackendTest {
     ExecutorService io;
     XrootdServer originA;
     XrootdServer ixcache;
-    Cache cache;
+    MultiCache cache;
     OriginBackend upstream;
     OriginBackend client;
 
@@ -73,7 +73,10 @@ class CachingBackendTest {
 
         io = Executors.newVirtualThreadPerTaskExecutor();
         originA = startServer(new LocalBackend(dir.resolve("originA"), io));
-        cache = Cache.open(CacheConfig.defaults(dir.resolve("cache"), 1L << 30).withBlockSize(64 * 1024));
+        // Two cache directories, as on a node with several disks.
+        cache = MultiCache.open(List.of(
+                CacheConfig.defaults(dir.resolve("disk1"), 1L << 29).withBlockSize(64 * 1024),
+                CacheConfig.defaults(dir.resolve("disk2"), 1L << 29).withBlockSize(64 * 1024)));
         upstream = new OriginBackend(originConfig());
         ixcache = startServer(new CachingBackend(cache, upstream, io));
         client = new OriginBackend(originConfig());

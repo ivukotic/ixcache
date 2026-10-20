@@ -1,11 +1,18 @@
 package org.atlasml.ixcache.cache;
 
 import java.io.IOException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Storage engine settings.
@@ -29,6 +36,8 @@ public record CacheConfig(
         Duration flushInterval,
         Duration closeTimeout) {
 
+    private static final Logger log = LoggerFactory.getLogger(CacheConfig.class);
+
     public static final int DEFAULT_BLOCK_SIZE = 64 * 1024;
 
     public CacheConfig {
@@ -47,23 +56,50 @@ public record CacheConfig(
     }
 
     /**
-     * Settings from the environment: {@code IXCACHE_CACHE_DIR} (required),
-     * {@code IXCACHE_CACHE_SIZE} (bytes, or with a K/M/G/T suffix; default: the
-     * size of the file system holding the directory), {@code IXCACHE_HIGH_WM} and
-     * {@code IXCACHE_LOW_WM} (fractions of the size), {@code IXCACHE_BLOCK_SIZE}.
+     * One configuration per cache directory, from the environment:
+     * {@code IXCACHE_CACHE_DIR} (comma-separated directories, typically one per
+     * disk), {@code IXCACHE_CACHE_SIZE} (per directory; bytes, or with a K/M/G/T
+     * suffix; default: the size of the directory's file system),
+     * {@code IXCACHE_HIGH_WM} and {@code IXCACHE_LOW_WM} (fractions of the size),
+     * {@code IXCACHE_BLOCK_SIZE}.
+     *
+     * <p>A directory that cannot be created or inspected is logged and left out.
+     * Without {@code IXCACHE_CACHE_SIZE}, two directories on one file system are
+     * refused: each would count the whole file system as its own.
      */
-    public static CacheConfig fromEnv(Map<String, String> env) throws IOException {
-        Path root = Path.of(env.get("IXCACHE_CACHE_DIR"));
-        Files.createDirectories(root);
+    public static List<CacheConfig> fromEnv(Map<String, String> env) throws IOException {
         String size = env.get("IXCACHE_CACHE_SIZE");
-        long capacity = size == null || size.isBlank()
-                ? Files.getFileStore(root).getTotalSpace() : parseBytes(size);
-        CacheConfig d = defaults(root, capacity);
-        return new CacheConfig(root, capacity,
-                Double.parseDouble(env.getOrDefault("IXCACHE_HIGH_WM", String.valueOf(d.highWatermark()))),
-                Double.parseDouble(env.getOrDefault("IXCACHE_LOW_WM", String.valueOf(d.lowWatermark()))),
-                (int) parseBytes(env.getOrDefault("IXCACHE_BLOCK_SIZE", String.valueOf(d.blockSize()))),
-                d.maxRequestBytes(), d.flushInterval(), d.closeTimeout());
+        boolean explicitSize = size != null && !size.isBlank();
+        double high = Double.parseDouble(env.getOrDefault("IXCACHE_HIGH_WM", "0.95"));
+        double low = Double.parseDouble(env.getOrDefault("IXCACHE_LOW_WM", "0.90"));
+        int blockSize = (int) parseBytes(env.getOrDefault("IXCACHE_BLOCK_SIZE", String.valueOf(DEFAULT_BLOCK_SIZE)));
+
+        List<CacheConfig> out = new ArrayList<>();
+        Map<FileStore, Path> stores = new HashMap<>();
+        for (String dir : env.getOrDefault("IXCACHE_CACHE_DIR", "").split(",")) {
+            if (dir.isBlank()) {
+                continue;
+            }
+            Path root = Path.of(dir.trim());
+            FileStore store;
+            try {
+                Files.createDirectories(root);
+                store = Files.getFileStore(root);
+            } catch (IOException e) {
+                log.error("cache directory {} is unusable, leaving it out: {}", root, e.toString());
+                continue;
+            }
+            Path other = stores.putIfAbsent(store, root);
+            if (other != null && !explicitSize) {
+                throw new IllegalArgumentException("cache directories " + other + " and " + root
+                        + " are on the same file system; set IXCACHE_CACHE_SIZE or list one of them");
+            }
+            long capacity = explicitSize ? parseBytes(size) : store.getTotalSpace();
+            CacheConfig d = defaults(root, capacity);
+            out.add(new CacheConfig(root, capacity, high, low, blockSize,
+                    Math.max(d.maxRequestBytes(), blockSize), d.flushInterval(), d.closeTimeout()));
+        }
+        return out;
     }
 
     /** Parses {@code 1048576}, {@code 64k}, {@code 500G}, {@code 2T} (powers of 1024). */

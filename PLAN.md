@@ -211,8 +211,18 @@ system size), `IXCACHE_HIGH_WM`, `IXCACHE_LOW_WM`, `IXCACHE_BLOCK_SIZE`. The
 integration tests run the whole path over TCP in one JVM. In Docker, `xrdcp`, the
 XRootD 6.2.0 client and ROOT read correctly through the cache from a GSI origin,
 then again with the origin stopped, and again after an ixcache restart. Known
-gaps: modification time is not stored, so opens and stats served from the cache
-report 0; only one cache directory is used (the pod's second disk is not).
+gap: modification time is not stored, so opens and stats served from the cache
+report 0.
+
+Several disks: `IXCACHE_CACHE_DIR` takes a comma-separated list, one directory
+per disk. Each is an independent `Cache` (own index, LRU and watermarks; size
+defaults to its file system), so disks of different sizes, added or removed
+disks, and a failed disk affect only their own entries. `MultiCache` finds a
+file by asking each disk and places a new file on a disk chosen at random,
+weighted by free space below the high watermark, which evens out fill levels and
+spreads writes. LRU is per disk, not global; with balanced placement the
+difference is small. Unusable directories are logged and skipped; two
+directories on one file system need an explicit `IXCACHE_CACHE_SIZE`.
 
 ### Phase 3 — Operations
 
