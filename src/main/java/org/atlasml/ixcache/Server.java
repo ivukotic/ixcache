@@ -20,6 +20,7 @@ import org.atlasml.ixcache.server.CachingBackend;
 import org.atlasml.ixcache.server.LocalBackend;
 import org.atlasml.ixcache.server.ServerConfig;
 import org.atlasml.ixcache.server.XrootdServer;
+import org.atlasml.ixcache.telemetry.Telemetry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,7 +69,11 @@ public final class Server {
             log.warn("IXCACHE_CACHE_DIR is not set: passing reads through without caching");
         }
 
-        XrootdServer server = XrootdServer.start(cfg, backend);
+        Optional<Telemetry> telemetry = Telemetry.fromEnv(env);
+        if (telemetry.isEmpty()) {
+            log.info("IXCACHE_TELEMETRY is not set: no transfer records are sent");
+        }
+        XrootdServer server = XrootdServer.start(cfg, backend, telemetry.orElse(null));
         MultiCache disks = cache;
         Optional<Heartbeat> heartbeat = heartbeatCfg.map(h ->
                 new Heartbeat(h, () -> disks == null ? 0 : disks.capacityBytes()));
@@ -78,6 +83,7 @@ public final class Server {
             log.info("shutting down");
             health.close();
             server.close();
+            telemetry.ifPresent(Telemetry::close); // after the server: flushes records of closed connections
             for (AutoCloseable c : onExit) {
                 try {
                     c.close();

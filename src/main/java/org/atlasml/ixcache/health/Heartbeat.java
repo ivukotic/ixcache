@@ -19,6 +19,7 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509ExtendedTrustManager;
 
+import org.atlasml.ixcache.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -128,31 +129,10 @@ public final class Heartbeat {
                 if (sb.length() > 1) {
                     sb.append(',');
                 }
-                sb.append(quote(k)).append(':').append(quote(fields.get(k)));
+                sb.append(Json.quote(k)).append(':').append(Json.quote(fields.get(k)));
             }
         }
         return sb.append('}').toString();
-    }
-
-    static String quote(String s) {
-        StringBuilder sb = new StringBuilder("\"");
-        for (char c : s.toCharArray()) {
-            switch (c) {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> {
-                    if (c < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) c));
-                    } else {
-                        sb.append(c);
-                    }
-                }
-            }
-        }
-        return sb.append('"').toString();
     }
 
     /** Accepts any server certificate and host name, as {@code curl -k} does. */

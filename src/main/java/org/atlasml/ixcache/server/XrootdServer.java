@@ -25,6 +25,7 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.Future;
 import org.atlasml.ixcache.gsi.GsiProperties;
+import org.atlasml.ixcache.telemetry.Telemetry;
 import org.dcache.xrootd.core.XrootdDecoder;
 import org.dcache.xrootd.core.XrootdEncoder;
 import org.dcache.xrootd.core.XrootdHandshakeHandler;
@@ -64,8 +65,18 @@ public final class XrootdServer implements AutoCloseable {
         void add(ChannelPipeline p, TLSSessionInfo tls, SigningPolicy signing);
     }
 
-    /** Binds {@code cfg.port()} and starts accepting clients. */
+    /** Binds {@code cfg.port()} and starts accepting clients, without telemetry. */
     public static XrootdServer start(ServerConfig cfg, Backend backend)
+            throws FileNotFoundException, InterruptedException {
+        return start(cfg, backend, null);
+    }
+
+    /**
+     * Binds {@code cfg.port()} and starts accepting clients.
+     *
+     * @param telemetry receives a record per closed file; may be null
+     */
+    public static XrootdServer start(ServerConfig cfg, Backend backend, Telemetry telemetry)
             throws FileNotFoundException, InterruptedException {
         LoginStage login = switch (cfg.auth()) {
             case NONE -> (p, tls, signing) -> p.addLast(SESSION_HANDLER, new AnonymousLoginHandler());
@@ -83,7 +94,7 @@ public final class XrootdServer implements AutoCloseable {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            initPipeline(ch.pipeline(), login, backend, cfg.site());
+                            initPipeline(ch.pipeline(), login, backend, cfg.site(), telemetry);
                         }
                     })
                     .bind(new InetSocketAddress(cfg.port())).sync().channel();
@@ -134,12 +145,12 @@ public final class XrootdServer implements AutoCloseable {
     }
 
     private static void initPipeline(ChannelPipeline p, LoginStage login, Backend backend,
-            Optional<String> site) {
+            Optional<String> site, Telemetry telemetry) {
         // Per-connection state: the session and client handlers share one TLSSessionInfo.
         TLSSessionInfo tls = new TLSSessionInfo(new ServerProtocolFlags(kXR_isServer));
         SigningPolicy signing = new SigningPolicy();
 
-        ClientHandler client = new ClientHandler(backend, site);
+        ClientHandler client = new ClientHandler(backend, site, telemetry);
         client.setTlsSessionInfo(tls);
         client.setSigningPolicy(signing);
 

@@ -14,6 +14,7 @@ import java.util.function.Supplier;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.atlasml.ixcache.health.Health.Check;
+import org.atlasml.ixcache.util.Json;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,19 +87,19 @@ public final class HealthServer implements AutoCloseable {
     }
 
     private static String report(boolean ok, List<Check> results, Heartbeat heartbeat) {
-        StringBuilder sb = new StringBuilder("{\"status\":").append(Heartbeat.quote(ok ? "ok" : "fail"))
+        StringBuilder sb = new StringBuilder("{\"status\":").append(Json.quote(ok ? "ok" : "fail"))
                 .append(",\"checks\":{");
         for (int i = 0; i < results.size(); i++) {
             Check c = results.get(i);
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(Heartbeat.quote(c.name())).append(":{\"ok\":").append(c.ok())
-                    .append(",\"detail\":").append(Heartbeat.quote(c.detail())).append('}');
+            sb.append(Json.quote(c.name())).append(":{\"ok\":").append(c.ok())
+                    .append(",\"detail\":").append(Json.quote(c.detail())).append('}');
         }
         sb.append('}');
         if (heartbeat != null) {
-            sb.append(",\"heartbeat\":").append(Heartbeat.quote(heartbeat.lastResult()));
+            sb.append(",\"heartbeat\":").append(Json.quote(heartbeat.lastResult()));
         }
         return sb.append("}\n").toString();
     }

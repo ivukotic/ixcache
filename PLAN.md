@@ -243,8 +243,14 @@ certificates. A passing `/readyz` sends the VPS heartbeat (`IXCACHE_HEARTBEAT_UR
 disk capacity in KB) at most once per `IXCACHE_HEARTBEAT_INTERVAL` (60 s), like
 the native XCache heartbeat container. Rucio heartbeats come from that native
 container itself, run as a third container in the pod: it checks `xrdfs query
-config sitename`, which ixcache answers with `IXCACHE_SITE`. Open: telemetry,
+config sitename`, which ixcache answers with `IXCACHE_SITE`. Open:
 metrics, request-pattern logging, structured logging.
+
+Telemetry (done): one UDP JSON record per closed file to `IXCACHE_TELEMETRY`,
+schema v1 in [docs/telemetry.md](docs/telemetry.md). Field changes from the
+original v1 list: added `site`, `instance`, `client_host`, `readv_elements` and
+`errors`; `bytes_in_new` is `bytes_fetched`; `status` is `closed` or
+`disconnected`.
 
 ### Phase 4 — Qualify and tune
 

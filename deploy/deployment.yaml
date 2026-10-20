@@ -104,6 +104,10 @@ spec:
             # The standard XRootD port (ixcache's default is 1092).
             - name: IXCACHE_PORT
               value: "1094"
+            # One UDP JSON record per closed file (schema v1), labelled with
+            # IXCACHE_SITE and IXCACHE_INSTANCE.
+            - name: IXCACHE_TELEMETRY
+              value: ixcache.atlas-ml.org:1095
             - name: IXCACHE_HEALTH_PORT
               value: "8092"
             # VPS heartbeat, sent (at most once a minute) when the readiness probe

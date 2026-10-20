@@ -123,6 +123,16 @@ public final class CachingBackend implements Backend {
         }
 
         @Override
+        public long bytesFromDisk() {
+            return bytesHit.get();
+        }
+
+        @Override
+        public long bytesFromOrigin() {
+            return bytesFetched.get();
+        }
+
+        @Override
         public CompletableFuture<List<ByteBuffer>> readv(List<Range> ranges) {
             return handle.readv(ranges, missing -> origin().thenCompose(f -> f.readv(missing)))
                     .thenApply(r -> {

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import io.netty.buffer.ByteBuf;
 import org.atlasml.ixcache.cache.Range;
@@ -34,6 +35,7 @@ final class OriginFile implements OpenFile {
     private final OriginBackend backend;
     private final Target target;
     private final FileInfo info;
+    private final AtomicLong bytesRead = new AtomicLong();
     private Handle handle; // guarded by this
     private CompletableFuture<Handle> reopening; // guarded by this
     private boolean closed; // guarded by this
@@ -63,7 +65,15 @@ final class OriginFile implements OpenFile {
                 return reopen(h).thenCompose(x -> read(x, ranges));
             }
             return CompletableFuture.failedFuture(OriginConnection.unwrap(e));
+        }).thenApply(data -> {
+            ranges.forEach(r -> bytesRead.addAndGet(r.length()));
+            return data;
         });
+    }
+
+    @Override
+    public long bytesFromOrigin() {
+        return bytesRead.get();
     }
 
     /** Replaces {@code failed} with a fresh open, once, however many reads notice it. */

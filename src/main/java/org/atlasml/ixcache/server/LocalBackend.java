@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import org.atlasml.ixcache.cache.Range;
@@ -94,6 +95,7 @@ public final class LocalBackend implements Backend {
 
         private final FileChannel ch;
         private final FileInfo info;
+        private final AtomicLong bytesRead = new AtomicLong();
 
         LocalFile(FileChannel ch, FileInfo info) {
             this.ch = ch;
@@ -103,6 +105,11 @@ public final class LocalBackend implements Backend {
         @Override
         public FileInfo info() {
             return info;
+        }
+
+        @Override
+        public long bytesFromDisk() {
+            return bytesRead.get();
         }
 
         @Override
@@ -121,6 +128,7 @@ public final class LocalBackend implements Backend {
                             pos += n;
                         }
                         out.add(b.flip());
+                        bytesRead.addAndGet(r.length());
                     }
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);

@@ -14,6 +14,7 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_readable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.InetSocketAddress;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,12 +24,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import org.atlasml.ixcache.cache.Range;
+import org.atlasml.ixcache.path.RequestPath;
+import org.atlasml.ixcache.telemetry.Telemetry;
+import org.atlasml.ixcache.telemetry.TransferRecord;
 import org.dcache.xrootd.core.XrootdException;
 import org.dcache.xrootd.core.XrootdProtocolRequestHandler;
 import org.dcache.xrootd.protocol.messages.CloseRequest;
@@ -70,13 +75,32 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
 
     private final Backend backend;
     private final Optional<String> site;
-    private final Map<Integer, OpenFile> files = new HashMap<>();
+    private final Telemetry telemetry; // may be null
+    private final Map<Integer, Open> files = new HashMap<>();
     private int nextHandle;
     private ChannelHandlerContext ctx;
 
-    ClientHandler(Backend backend, Optional<String> site) {
+    /** A file this client has open, with what it did, for telemetry. */
+    private static final class Open {
+        final OpenFile file;
+        final String path;
+        final long openedNanos = System.nanoTime();
+        long readOps;
+        long readvOps;
+        long readvElements;
+        long bytesOut;
+        long errors;
+
+        Open(OpenFile file, String path) {
+            this.file = file;
+            this.path = path;
+        }
+    }
+
+    ClientHandler(Backend backend, Optional<String> site, Telemetry telemetry) {
         this.backend = backend;
         this.site = site;
+        this.telemetry = telemetry;
     }
 
     @Override
@@ -86,7 +110,10 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        files.values().forEach(OpenFile::close);
+        for (Open o : files.values()) {
+            o.file.close();
+            report(o, "disconnected");
+        }
         files.clear();
         super.channelInactive(ctx);
     }
@@ -113,7 +140,7 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
                 file.close();
             } else {
                 int fh = nextHandle++;
-                files.put(fh, file);
+                files.put(fh, new Open(file, msg.getPath()));
                 FileStatus fs = msg.isRetStat() ? status(file.info()) : null;
                 respond(ctx, new OpenResponse(msg, fh, null, null, fs));
             }
@@ -124,7 +151,7 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
     @Override
     protected Object doOnStat(ChannelHandlerContext ctx, StatRequest msg) throws XrootdException {
         if (msg.getTarget() == StatRequest.Target.FHANDLE) {
-            return new StatResponse(msg, status(file(msg.getFhandle()).info()));
+            return new StatResponse(msg, status(open(msg.getFhandle()).file.info()));
         }
         reply(msg, backend.stat(msg.getPath(), msg.getOpaque()),
                 info -> new StatResponse(msg, status(info)));
@@ -133,19 +160,27 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
 
     @Override
     protected Object doOnRead(ChannelHandlerContext ctx, ReadRequest msg) throws XrootdException {
-        OpenFile file = file(msg.getFileHandle());
+        Open o = open(msg.getFileHandle());
         if (msg.getReadOffset() < 0 || msg.bytesToRead() < 0) {
             throw new XrootdException(kXR_ArgInvalid, "negative offset or length");
         }
         if (msg.bytesToRead() > MAX_READ_BYTES) {
             throw new XrootdException(kXR_ArgTooLong, "read larger than " + MAX_READ_BYTES);
         }
-        Range r = new Range(msg.getReadOffset(), msg.bytesToRead()).clamp(file.info().size());
+        Range r = new Range(msg.getReadOffset(), msg.bytesToRead()).clamp(o.file.info().size());
+        o.readOps++;
         if (r.length() == 0) {
             return new ReadResponse(msg, Unpooled.EMPTY_BUFFER, false);
         }
-        reply(msg, file.readv(List.of(r)),
-                data -> new ReadResponse(msg, Unpooled.wrappedBuffer(data.get(0)), false));
+        reply(msg, o.file.readv(List.of(r)),
+                data -> new ReadResponse(msg, Unpooled.wrappedBuffer(data.get(0)), false),
+                err -> {
+                    if (err == null) {
+                        o.bytesOut += r.length();
+                    } else {
+                        o.errors++;
+                    }
+                });
         return null;
     }
 
@@ -160,7 +195,7 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
         }
 
         // Elements may name different files: one backend read per file.
-        Map<OpenFile, List<Integer>> byFile = new LinkedHashMap<>();
+        Map<Open, List<Integer>> byFile = new LinkedHashMap<>();
         Range[] ranges = new Range[reqs.length];
         long total = 0;
         for (int i = 0; i < reqs.length; i++) {
@@ -168,15 +203,15 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
             if (e.getOffset() < 0 || e.BytesToRead() < 0) {
                 throw new XrootdException(kXR_ArgInvalid, "negative offset or length");
             }
-            OpenFile file = file(e.getFileHandle());
+            Open o = open(e.getFileHandle());
             ranges[i] = new Range(e.getOffset(), e.BytesToRead());
             // Clients require every element in full; the reference server fails the
             // whole request when one extends past EOF, and so do we.
-            if (ranges[i].end() > file.info().size()) {
+            if (ranges[i].end() > o.file.info().size()) {
                 throw new XrootdException(kXR_FSError, "vector read past end of file");
             }
             total += ranges[i].length();
-            byFile.computeIfAbsent(file, f -> new ArrayList<>()).add(i);
+            byFile.computeIfAbsent(o, f -> new ArrayList<>()).add(i);
         }
         if (total > MAX_READ_BYTES) {
             throw new XrootdException(kXR_ArgTooLong, "vector read larger than " + MAX_READ_BYTES);
@@ -184,26 +219,36 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
 
         ByteBuf[] data = new ByteBuf[reqs.length];
         List<CompletableFuture<Void>> parts = new ArrayList<>(byFile.size());
-        byFile.forEach((file, idx) -> {
+        byFile.forEach((o, idx) -> {
+            o.readvOps++;
+            o.readvElements += idx.size();
             List<Range> rs = idx.stream().map(i -> ranges[i]).toList();
-            parts.add(file.readv(rs).thenAccept(bufs -> {
+            parts.add(o.file.readv(rs).thenAccept(bufs -> {
                 for (int k = 0; k < idx.size(); k++) {
                     data[idx.get(k)] = Unpooled.wrappedBuffer(bufs.get(k));
                 }
             }));
         });
         reply(msg, CompletableFuture.allOf(parts.toArray(CompletableFuture[]::new)),
-                v -> new ReadVResponse(msg, reqs, data, 0, reqs.length, false));
+                v -> new ReadVResponse(msg, reqs, data, 0, reqs.length, false),
+                err -> byFile.forEach((o, idx) -> {
+                    if (err == null) {
+                        idx.forEach(i -> o.bytesOut += ranges[i].length());
+                    } else {
+                        o.errors++;
+                    }
+                }));
         return null;
     }
 
     @Override
     protected Object doOnClose(ChannelHandlerContext ctx, CloseRequest msg) throws XrootdException {
-        OpenFile file = files.remove(msg.getFileHandle());
-        if (file == null) {
+        Open o = files.remove(msg.getFileHandle());
+        if (o == null) {
             throw new XrootdException(kXR_FileNotOpen, "invalid file handle");
         }
-        file.close();
+        o.file.close();
+        report(o, "closed");
         return withOk(msg);
     }
 
@@ -230,24 +275,56 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
         return new OkResponse<>(msg);
     }
 
-    private OpenFile file(int fh) throws XrootdException {
-        OpenFile file = files.get(fh);
-        if (file == null) {
+    private Open open(int fh) throws XrootdException {
+        Open o = files.get(fh);
+        if (o == null) {
             throw new XrootdException(kXR_FileNotOpen, "invalid file handle");
         }
-        return file;
+        return o;
     }
 
     /** Answers {@code msg} on the event loop when {@code f} completes. */
     private <T, R extends XrootdRequest> void reply(R msg, CompletableFuture<T> f,
             Function<T, Object> response) {
+        reply(msg, f, response, err -> { });
+    }
+
+    /** As above; {@code done} then runs on the event loop with the error, or null on success. */
+    private <T, R extends XrootdRequest> void reply(R msg, CompletableFuture<T> f,
+            Function<T, Object> response, Consumer<Throwable> done) {
         f.whenComplete((v, err) -> onLoop(() -> {
+            done.accept(err);
             if (err != null) {
                 fail(msg, err);
             } else if (ctx.channel().isActive()) {
                 respond(ctx, response.apply(v));
             }
         }));
+    }
+
+    /** Sends the telemetry record for a file this client no longer has open. */
+    private void report(Open o, String status) {
+        if (telemetry == null) {
+            return;
+        }
+        String origin = "";
+        String path = o.path;
+        String key = "";
+        try {
+            RequestPath rp = RequestPath.parse(o.path);
+            origin = rp.host() + ":" + rp.port();
+            path = rp.path();
+            key = rp.cacheKey().id();
+        } catch (IllegalArgumentException e) {
+            // not an embedded origin URL (local files): report the path as given
+        }
+        String host = ctx.channel().remoteAddress() instanceof InetSocketAddress a
+                ? a.getAddress().getHostAddress() : String.valueOf(ctx.channel().remoteAddress());
+        String dn = ctx.channel().attr(GsiLoginHandler.CLIENT_DN).get();
+        telemetry.record(new TransferRecord(host, dn == null ? "" : dn, origin, path, key,
+                o.file.info().size(), o.bytesOut, o.file.bytesFromDisk(), o.file.bytesFromOrigin(),
+                o.readOps, o.readvOps, o.readvElements, o.errors,
+                (System.nanoTime() - o.openedNanos) / 1_000_000, status));
     }
 
     private void onLoop(Runnable r) {
