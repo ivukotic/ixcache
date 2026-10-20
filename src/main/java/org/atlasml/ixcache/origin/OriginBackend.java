@@ -7,8 +7,10 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_other;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.BiFunction;
@@ -37,12 +39,14 @@ public final class OriginBackend implements Backend, AutoCloseable {
     private final OriginConfig cfg;
     private final EventLoopGroup group;
     private final OriginPool pool;
+    private final GsiClient gsi;
 
     public OriginBackend(OriginConfig cfg) throws FileNotFoundException {
         this.cfg = cfg;
         this.group = new NioEventLoopGroup(Math.max(2, Runtime.getRuntime().availableProcessors() / 4),
                 new DefaultThreadFactory("ixcache-origin", true));
-        this.pool = new OriginPool(group, cfg, new GsiClient(cfg));
+        this.gsi = new GsiClient(cfg);
+        this.pool = new OriginPool(group, cfg, gsi);
         if (cfg.proxy().isEmpty()) {
             log.warn("X509_USER_PROXY is not set: only origins that need no authentication will work");
         }
@@ -218,6 +222,14 @@ public final class OriginBackend implements Backend, AutoCloseable {
             return a;
         }
         return a + "&" + b;
+    }
+
+    /**
+     * When the service proxy expires, or empty if none is configured. Fails if
+     * the proxy is configured but cannot be read.
+     */
+    public Optional<Instant> proxyExpiry() throws IOException {
+        return gsi.proxyExpiry();
     }
 
     @Override

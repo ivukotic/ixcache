@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -68,12 +69,14 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
     static final int READV_IOR_MAX = 2097136;
 
     private final Backend backend;
+    private final Optional<String> site;
     private final Map<Integer, OpenFile> files = new HashMap<>();
     private int nextHandle;
     private ChannelHandlerContext ctx;
 
-    ClientHandler(Backend backend) {
+    ClientHandler(Backend backend, Optional<String> site) {
         this.backend = backend;
+        this.site = site;
     }
 
     @Override
@@ -215,6 +218,7 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
             sb.append(switch (name) {
                 case "readv_iov_max" -> String.valueOf(READV_IOV_MAX);
                 case "readv_ior_max" -> String.valueOf(READV_IOR_MAX);
+                case "sitename" -> site.orElse(name);
                 default -> name;
             }).append('\n');
         }

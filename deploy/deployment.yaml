@@ -97,7 +97,26 @@ spec:
             - name: xrootd
               containerPort: 1092
               protocol: TCP
+            - name: health
+              containerPort: 8092
+              protocol: TCP
           env:
+            - name: IXCACHE_HEALTH_PORT
+              value: "8092"
+            # VPS heartbeat, sent (at most once a minute) when the readiness probe
+            # passes. size is the cache disks' total capacity in KB.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: IXCACHE_HEARTBEAT_URL
+              value: https://vps.cern.ch/liveness
+            - name: IXCACHE_SITE
+              value: MWT2
+            - name: IXCACHE_INSTANCE
+              value: xcache-uc-1
+            - name: IXCACHE_ADDRESS
+              value: $(HOST_IP):1092
             # One directory per disk (comma-separated), each a subdirectory so
             # nothing else on the disk is counted or touched. Each directory's size
             # defaults to its file system; IXCACHE_CACHE_SIZE overrides it per
@@ -123,20 +142,27 @@ spec:
             limits:
               memory: 32Gi
               cpu: "32"
-          # Replace with HTTP health/readiness endpoints once they exist (Phase 3).
+          # /healthz: XRootD port open and network threads responsive.
+          # /readyz: also a writable cache disk, a valid service proxy and CA
+          # certificates; passing it sends the VPS heartbeat when one is due.
           startupProbe:
-            tcpSocket:
-              port: xrootd
+            httpGet:
+              path: /healthz
+              port: health
             periodSeconds: 5
             failureThreshold: 60
           readinessProbe:
-            tcpSocket:
-              port: xrootd
+            httpGet:
+              path: /readyz
+              port: health
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: xrootd
+            httpGet:
+              path: /healthz
+              port: health
             periodSeconds: 20
+            timeoutSeconds: 5
             failureThreshold: 3
           securityContext:
             allowPrivilegeEscalation: false
@@ -156,6 +182,55 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+
+        # Rucio heartbeat, as on the native XCaches: every FREQUENCY seconds it
+        # asks ixcache for its site name (xrdfs query config sitename) and, if it
+        # matches XC_RESOURCENAME, posts a heartbeat to Rucio as the xcache account
+        # (token from the shared proxy). size is the df total of /xcache/data_*.
+        # Runs as root: rucio writes its token under /opt/rucio/etc.
+        - name: heartbeats
+          image: harbor.tempest.uchicago.edu/docker.io/ivukotic/atlas-xcache-heartbeats:2026.10.18
+          imagePullPolicy: Always
+          command:
+            - /usr/local/sbin/run_heartbeats.sh
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: XC_RESOURCENAME
+              value: MWT2
+            - name: XC_INSTANCE
+              value: xcache-uc-1
+            - name: ADDRESS
+              value: $(HOST_IP):1092
+            - name: FREQUENCY
+              value: "60"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512M
+            requests:
+              cpu: 500m
+              memory: 512M
+              ephemeral-storage: 600Mi
+          volumeMounts:
+            - mountPath: /etc/proxy/
+              name: x509-data
+              readOnly: true
+            - mountPath: /etc/grid-certs/
+              name: x509-certs-volume
+              readOnly: true
+            - mountPath: /xcache/data_0
+              name: xcache-data-0
+              readOnly: true
+            - mountPath: /xcache/data_1
+              name: xcache-data-1
+              readOnly: true
 
       volumes:
         # CA certificates and CRLs, filled and refreshed by the x509 sidecar.

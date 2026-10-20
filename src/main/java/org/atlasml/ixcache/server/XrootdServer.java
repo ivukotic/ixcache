@@ -6,8 +6,11 @@ import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_isServer;
 
 import java.io.FileNotFoundException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.concurrent.RejectedExecutionException;
 
 import eu.emi.security.authn.x509.X509CertChainValidator;
 import io.netty.bootstrap.ServerBootstrap;
@@ -19,6 +22,8 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.Future;
 import org.atlasml.ixcache.gsi.GsiProperties;
 import org.dcache.xrootd.core.XrootdDecoder;
 import org.dcache.xrootd.core.XrootdEncoder;
@@ -78,7 +83,7 @@ public final class XrootdServer implements AutoCloseable {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            initPipeline(ch.pipeline(), login, backend);
+                            initPipeline(ch.pipeline(), login, backend, cfg.site());
                         }
                     })
                     .bind(new InetSocketAddress(cfg.port())).sync().channel();
@@ -128,12 +133,13 @@ public final class XrootdServer implements AutoCloseable {
         };
     }
 
-    private static void initPipeline(ChannelPipeline p, LoginStage login, Backend backend) {
+    private static void initPipeline(ChannelPipeline p, LoginStage login, Backend backend,
+            Optional<String> site) {
         // Per-connection state: the session and client handlers share one TLSSessionInfo.
         TLSSessionInfo tls = new TLSSessionInfo(new ServerProtocolFlags(kXR_isServer));
         SigningPolicy signing = new SigningPolicy();
 
-        ClientHandler client = new ClientHandler(backend);
+        ClientHandler client = new ClientHandler(backend, site);
         client.setTlsSessionInfo(tls);
         client.setSigningPolicy(signing);
 
@@ -146,6 +152,32 @@ public final class XrootdServer implements AutoCloseable {
 
     public InetSocketAddress localAddress() {
         return (InetSocketAddress) channel.localAddress();
+    }
+
+    /** True while the listening socket is open. */
+    public boolean isListening() {
+        return channel != null && channel.isActive();
+    }
+
+    /**
+     * True if every client event loop runs a trivial task within {@code timeout}:
+     * a blocked or deadlocked loop would stall all its connections.
+     */
+    public boolean eventLoopsResponsive(Duration timeout) {
+        if (workers.isShuttingDown()) {
+            return false;
+        }
+        try {
+            for (EventExecutor loop : workers) {
+                Future<?> f = loop.submit(() -> { });
+                if (!f.awaitUninterruptibly(timeout.toMillis()) || !f.isSuccess()) {
+                    return false;
+                }
+            }
+        } catch (RejectedExecutionException e) {
+            return false;
+        }
+        return true;
     }
 
     @Override

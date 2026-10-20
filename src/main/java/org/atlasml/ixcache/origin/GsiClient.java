@@ -12,6 +12,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.GeneralSecurityException;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -68,6 +69,14 @@ final class GsiClient {
         this.props = GsiProperties.of(cfg.caDir(), null, null);
         this.validator = new CertChainValidatorProvider(props).getCertChainValidator();
         this.loader = new CredentialLoader(props, validator);
+    }
+
+    /** Expiry of the service proxy (re-read if its file changed), or empty if none is configured. */
+    Optional<Instant> proxyExpiry() throws IOException {
+        if (proxy.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(proxy.get().get().getCertChain()[0].getNotAfter().toInstant());
     }
 
     CompletableFuture<Void> authenticate(OriginConnection conn, SecurityInfo gsi) {

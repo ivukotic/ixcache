@@ -234,6 +234,18 @@ directories on one file system need an explicit `IXCACHE_CACHE_SIZE`.
   `/etc/grid-security/certificates` (kept up to date) so client and origin
   certificates can be validated.
 
+**Status (2026-10-20):** done: service proxy reload, graceful shutdown, Kubernetes
+manifests, and health endpoints on `IXCACHE_HEALTH_PORT` (8092). `/healthz`
+checks that the XRootD port is open and the network threads respond; `/readyz`
+also checks for a writable cache disk, an unexpired service proxy and CA
+certificates. A passing `/readyz` sends the VPS heartbeat (`IXCACHE_HEARTBEAT_URL`,
+`IXCACHE_SITE`, `IXCACHE_INSTANCE`, `IXCACHE_ADDRESS`; JSON with `size` = cache
+disk capacity in KB) at most once per `IXCACHE_HEARTBEAT_INTERVAL` (60 s), like
+the native XCache heartbeat container. Rucio heartbeats come from that native
+container itself, run as a third container in the pod: it checks `xrdfs query
+config sitename`, which ixcache answers with `IXCACHE_SITE`. Open: telemetry,
+metrics, request-pattern logging, structured logging.
+
 ### Phase 4 — Qualify and tune
 
 - Workloads: `xrdcp` of large files, and ROOT TTreeCache reads of real ATLAS

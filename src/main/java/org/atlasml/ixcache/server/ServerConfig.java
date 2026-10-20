@@ -15,11 +15,18 @@ import java.util.Optional;
  * @param caDir       trusted CA certificates and CRLs ({@code X509_CERT_DIR})
  * @param localRoot   if set, serve files from this directory instead of origins
  *                    ({@code IXCACHE_LOCAL_ROOT}); for testing only
+ * @param site        site name answered to {@code query config sitename}
+ *                    ({@code IXCACHE_SITE}); the heartbeat container checks it
  */
 public record ServerConfig(int port, Auth auth, Path hostCert, Path hostKey, Path caDir,
-        Optional<Path> localRoot) {
+        Optional<Path> localRoot, Optional<String> site) {
 
     public static final int DEFAULT_PORT = 1092;
+
+    /** Without a site name. */
+    public ServerConfig(int port, Auth auth, Path hostCert, Path hostKey, Path caDir, Optional<Path> localRoot) {
+        this(port, auth, hostCert, hostKey, caDir, localRoot, Optional.empty());
+    }
 
     /** How clients authenticate. */
     public enum Auth {
@@ -36,7 +43,8 @@ public record ServerConfig(int port, Auth auth, Path hostCert, Path hostKey, Pat
                 Path.of(env.getOrDefault("IXCACHE_HOSTCERT", "/etc/grid-security/hostcert.pem")),
                 Path.of(env.getOrDefault("IXCACHE_HOSTKEY", "/etc/grid-security/hostkey.pem")),
                 Path.of(env.getOrDefault("X509_CERT_DIR", "/etc/grid-security/certificates")),
-                Optional.ofNullable(env.get("IXCACHE_LOCAL_ROOT")).filter(s -> !s.isBlank()).map(Path::of));
+                Optional.ofNullable(env.get("IXCACHE_LOCAL_ROOT")).filter(s -> !s.isBlank()).map(Path::of),
+                Optional.ofNullable(env.get("IXCACHE_SITE")).map(String::trim).filter(s -> !s.isEmpty()));
     }
 
     private static Auth parseAuth(String s) {
