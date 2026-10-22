@@ -47,7 +47,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * One logged-in (and, if the origin asks for it, GSI-authenticated) connection
+ * One logged-in (and, if the origin asks for it, GSI- or unix-authenticated) connection
  * to an origin, carrying many requests at once. Replies are matched to requests
  * by stream ID.
  *
@@ -171,6 +171,11 @@ final class OriginConnection {
                     for (SecurityInfo p : protocols) {
                         if (p.getProtocol().equals("gsi")) {
                             return gsi.authenticate(this, p);
+                        }
+                    }
+                    for (SecurityInfo p : protocols) {
+                        if (p.getProtocol().equals("unix")) {
+                            return send(Requests.unixAuth("ixcache", "ixcache")).thenAccept(r -> r.data().release());
                         }
                     }
                     return CompletableFuture.failedFuture(new XrootdException(kXR_ServerError,

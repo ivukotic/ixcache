@@ -160,6 +160,23 @@ class OriginBackendTest {
         assertEquals(1096, u.port);
     }
 
+    @Test
+    void encodesUnixAuth() {
+        io.netty.buffer.ByteBuf b = Requests.unixAuth("ixcache", "ixcache");
+        try {
+            assertEquals(XrootdProtocol.kXR_auth, b.getUnsignedShort(2));
+            assertEquals("unix", b.toString(16, 4, java.nio.charset.StandardCharsets.US_ASCII));
+            byte[] creds = "unix\0ixcache ixcache\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            assertEquals(creds.length, b.getInt(20));
+            assertEquals(24 + creds.length, b.readableBytes());
+            byte[] got = new byte[creds.length];
+            b.getBytes(24, got);
+            assertArrayEquals(creds, got);
+        } finally {
+            b.release();
+        }
+    }
+
     private static byte[] bytes(ByteBuffer b) {
         byte[] out = new byte[b.remaining()];
         b.duplicate().get(out);

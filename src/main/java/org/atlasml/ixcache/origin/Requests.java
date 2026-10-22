@@ -2,6 +2,7 @@ package org.atlasml.ixcache.origin;
 
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static org.dcache.xrootd.protocol.XrootdProtocol.PROTOCOL_VERSION;
+import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_auth;
 import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_close;
 import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_login;
 import static org.dcache.xrootd.protocol.XrootdProtocol.kXR_open;
@@ -58,6 +59,18 @@ final class Requests {
         b.writeByte(kXR_ver005); // capver: no async (kXR_attn) messages wanted
         b.writeByte(0);
         return withData(b, "xrd.appname=ixcache".getBytes(US_ASCII));
+    }
+
+    /**
+     * Authenticates with the {@code unix} protocol: credentials are
+     * {@code "unix\0<user> <group>\0"}, accepted in one step. EOS disk servers
+     * offer it; access there is granted by the capability in the redirect CGI.
+     */
+    static ByteBuf unixAuth(String user, String group) {
+        ByteBuf b = header(kXR_auth);
+        b.writeZero(12);
+        b.writeBytes("unix".getBytes(US_ASCII)); // credtype
+        return withData(b, ("unix\0" + user + " " + group + "\0").getBytes(US_ASCII));
     }
 
     /** Opens {@code pathAndCgi} read-only, asking for its stat information. */
