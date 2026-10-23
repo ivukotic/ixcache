@@ -15,7 +15,7 @@ with local NVMe. Requirements are in `README.md`:
 
 | Topic | Decision |
 | --- | --- |
-| Language / runtime | Java 21+ (LTS; move to 25 when the build environment has it), Maven wrapper (matches xrootd4j/dCache) |
+| Language / runtime | Java 25 LTS, Maven wrapper (matches xrootd4j/dCache) |
 | Networking | Netty for client-facing server and origin client |
 | Client-facing protocol | xrootd4j server-side codec + GSI plugin, confirmed by Phase 0 spike |
 | Origin auth | One service proxy read from `X509_USER_PROXY`; reloaded when the file changes |

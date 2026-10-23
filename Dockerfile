@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- build ----
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 
 # Resolve dependencies first so they are cached between source changes.
@@ -17,7 +17,7 @@ RUN ./mvnw -B -q -DskipTests package \
  && cp target/ixcache-*.jar target/lib/ixcache.jar
 
 # ---- runtime ----
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 
 RUN groupadd --system --gid 10940 ixcache \
  && useradd --system --uid 10940 --gid ixcache --home-dir /opt/ixcache --shell /usr/sbin/nologin ixcache \
