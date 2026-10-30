@@ -30,6 +30,7 @@ import java.util.function.Function;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.util.ReferenceCountUtil;
 import org.atlasml.ixcache.cache.Range;
 import org.atlasml.ixcache.path.RequestPath;
 import org.atlasml.ixcache.telemetry.Telemetry;
@@ -72,12 +73,19 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
     /** Vector read limits advertised through kXR_Qconfig, as in the reference server. */
     static final int READV_IOV_MAX = 1024;
     static final int READV_IOR_MAX = 2097136;
+    /**
+     * Read bytes a connection may have requested and not yet been sent; past
+     * this, or while its outbound buffer is above the high water mark, no more
+     * requests are read from it, so a slow or greedy client cannot fill memory.
+     */
+    static final long MAX_PENDING_BYTES = 64L * 1024 * 1024;
 
     private final Backend backend;
     private final Optional<String> site;
     private final Telemetry telemetry; // may be null
     private final Map<Integer, Open> files = new HashMap<>();
     private int nextHandle;
+    private long pendingBytes;
     private ChannelHandlerContext ctx;
 
     /** A file this client has open, with what it did, for telemetry. */
@@ -116,6 +124,12 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
         }
         files.clear();
         super.channelInactive(ctx);
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+        updateAutoRead();
+        super.channelWritabilityChanged(ctx);
     }
 
     @Override
@@ -172,9 +186,11 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
         if (r.length() == 0) {
             return new ReadResponse(msg, Unpooled.EMPTY_BUFFER, false);
         }
-        reply(msg, o.file.readv(List.of(r)),
-                data -> new ReadResponse(msg, Unpooled.wrappedBuffer(data.get(0)), false),
+        reserve(r.length());
+        reply(msg, o.file.read(List.of(r)),
+                data -> new ReadResponse(msg, data.get(0), false),
                 err -> {
+                    unreserve(r.length());
                     if (err == null) {
                         o.bytesOut += r.length();
                     } else {
@@ -217,27 +233,44 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
             throw new XrootdException(kXR_ArgTooLong, "vector read larger than " + MAX_READ_BYTES);
         }
 
-        ByteBuf[] data = new ByteBuf[reqs.length];
-        List<CompletableFuture<Void>> parts = new ArrayList<>(byFile.size());
+        List<CompletableFuture<List<ByteBuf>>> parts = new ArrayList<>(byFile.size());
         byFile.forEach((o, idx) -> {
             o.readvOps++;
             o.readvElements += idx.size();
-            List<Range> rs = idx.stream().map(i -> ranges[i]).toList();
-            parts.add(o.file.readv(rs).thenAccept(bufs -> {
-                for (int k = 0; k < idx.size(); k++) {
-                    data[idx.get(k)] = Unpooled.wrappedBuffer(bufs.get(k));
-                }
-            }));
+            parts.add(o.file.read(idx.stream().map(i -> ranges[i]).toList()));
         });
-        reply(msg, CompletableFuture.allOf(parts.toArray(CompletableFuture[]::new)),
-                v -> new ReadVResponse(msg, reqs, data, 0, reqs.length, false),
-                err -> byFile.forEach((o, idx) -> {
-                    if (err == null) {
-                        idx.forEach(i -> o.bytesOut += ranges[i].length());
-                    } else {
-                        o.errors++;
+        // allOf completes once every part has, so a failure can release the parts that succeeded.
+        CompletableFuture<ByteBuf[]> all = CompletableFuture.allOf(parts.toArray(CompletableFuture[]::new))
+                .handle((v, err) -> {
+                    if (err != null) {
+                        parts.stream().filter(p -> !p.isCompletedExceptionally())
+                                .forEach(p -> p.join().forEach(ByteBuf::release));
+                        throw err instanceof CompletionException c ? c : new CompletionException(err);
                     }
-                }));
+                    ByteBuf[] data = new ByteBuf[reqs.length];
+                    int part = 0;
+                    for (List<Integer> idx : byFile.values()) {
+                        List<ByteBuf> bufs = parts.get(part++).join();
+                        for (int k = 0; k < idx.size(); k++) {
+                            data[idx.get(k)] = bufs.get(k);
+                        }
+                    }
+                    return data;
+                });
+        long bytes = total;
+        reserve(bytes);
+        reply(msg, all,
+                data -> new ReadVResponse(msg, reqs, data, 0, reqs.length, false),
+                err -> {
+                    unreserve(bytes);
+                    byFile.forEach((o, idx) -> {
+                        if (err == null) {
+                            idx.forEach(i -> o.bytesOut += ranges[i].length());
+                        } else {
+                            o.errors++;
+                        }
+                    });
+                });
         return null;
     }
 
@@ -289,17 +322,44 @@ final class ClientHandler extends XrootdProtocolRequestHandler {
         reply(msg, f, response, err -> { });
     }
 
-    /** As above; {@code done} then runs on the event loop with the error, or null on success. */
+    /**
+     * As above; {@code done} then runs on the event loop with the error, or null on
+     * success. A response not sent because the client has gone is released.
+     */
     private <T, R extends XrootdRequest> void reply(R msg, CompletableFuture<T> f,
             Function<T, Object> response, Consumer<Throwable> done) {
         f.whenComplete((v, err) -> onLoop(() -> {
             done.accept(err);
             if (err != null) {
                 fail(msg, err);
-            } else if (ctx.channel().isActive()) {
-                respond(ctx, response.apply(v));
+                return;
+            }
+            Object r = response.apply(v);
+            if (ctx.channel().isActive()) {
+                respond(ctx, r);
+            } else {
+                ReferenceCountUtil.release(r);
             }
         }));
+    }
+
+    /** Counts {@code bytes} of requested reads against this connection, pausing it if needed. */
+    private void reserve(long bytes) {
+        pendingBytes += bytes;
+        updateAutoRead();
+    }
+
+    private void unreserve(long bytes) {
+        pendingBytes -= bytes;
+        updateAutoRead();
+    }
+
+    /** Reads requests only while few bytes are pending and the outbound buffer has room. */
+    private void updateAutoRead() {
+        boolean read = pendingBytes < MAX_PENDING_BYTES && ctx.channel().isWritable();
+        if (ctx.channel().config().isAutoRead() != read) {
+            ctx.channel().config().setAutoRead(read);
+        }
     }
 
     /** Sends the telemetry record for a file this client no longer has open. */

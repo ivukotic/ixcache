@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -18,6 +17,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
+import io.netty.buffer.ByteBuf;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,8 +48,18 @@ class CacheTest {
         return CacheConfig.defaults(root, 1024 * MB);
     }
 
-    static void assertData(long offset, int length, ByteBuffer actual) {
-        assertEquals(FakeOrigin.expected(offset, length), actual, "data at " + offset + "+" + length);
+    /** Checks {@code actual} and releases it. */
+    static void assertData(long offset, int length, ByteBuf actual) {
+        try {
+            assertEquals(FakeOrigin.expected(offset, length), actual.nioBuffer(), "data at " + offset + "+" + length);
+        } finally {
+            actual.release();
+        }
+    }
+
+    /** Releases the buffers of a read done only for its side effects. */
+    static void release(ReadResult r) {
+        r.data().forEach(ByteBuf::release);
     }
 
     /** Waits until all scheduled disk writes for {@code h} have been published. */
@@ -79,7 +89,7 @@ class CacheTest {
         Cache c = open(cfg());
         FakeOrigin origin = new FakeOrigin(10 * MB);
         try (CacheHandle h = c.acquire(new CacheKey("k"), "root://o//f", origin.size)) {
-            h.read(1000, 300_000, origin).join();
+            release(h.read(1000, 300_000, origin).join());
             awaitPublished(c, 5L * BS);
             int before = origin.requests.size();
             ReadResult r = h.read(5000, 200_000, origin).join();
@@ -94,7 +104,7 @@ class CacheTest {
         Cache c = open(cfg());
         FakeOrigin origin = new FakeOrigin(10 * MB);
         try (CacheHandle h = c.acquire(new CacheKey("k"), "root://o//f", origin.size)) {
-            h.read(BS, BS, origin).join(); // block 1
+            release(h.read(BS, BS, origin).join()); // block 1
             awaitPublished(c, BS);
             origin.requests.clear();
             ReadResult r = h.read(0, 3 * BS, origin).join(); // blocks 0..2, 1 is cached
@@ -111,11 +121,11 @@ class CacheTest {
         FakeOrigin origin = new FakeOrigin(size);
         try (CacheHandle h = c.acquire(new CacheKey("k"), "root://o//f", size)) {
             ReadResult r = h.read(3L * BS, 1000, origin).join();
-            assertEquals(123, r.data().get(0).remaining());
+            assertEquals(123, r.data().get(0).readableBytes());
             assertData(3L * BS, 123, r.data().get(0));
             assertEquals(List.of(List.of(new Range(3L * BS, 123))), origin.requests);
             ReadResult past = h.read(size + 10, 100, origin).join();
-            assertEquals(0, past.data().get(0).remaining());
+            assertEquals(0, past.data().get(0).readableBytes());
             awaitPublished(c, 123);
         }
     }
@@ -229,7 +239,7 @@ class CacheTest {
         FakeOrigin origin = new FakeOrigin(10 * MB);
         CacheKey key = new CacheKey("rucio:user.x:f");
         try (CacheHandle h = c.acquire(key, "root://o//f", origin.size)) {
-            h.read(0, 3 * BS, origin).join();
+            release(h.read(0, 3 * BS, origin).join());
             awaitPublished(c, 3L * BS);
         }
         c.close();
@@ -255,7 +265,7 @@ class CacheTest {
         FakeOrigin origin = new FakeOrigin(10 * MB);
         CacheKey key = new CacheKey("k");
         CacheHandle h = c.acquire(key, "root://o//f", origin.size);
-        h.read(0, BS, origin).join();
+        release(h.read(0, BS, origin).join());
         awaitPublished(c, BS);
         cache = null; // abandon without close
 
@@ -278,7 +288,7 @@ class CacheTest {
         Cache c = open(cfg());
         FakeOrigin origin = new FakeOrigin(MB);
         try (CacheHandle h = c.acquire(new CacheKey("k"), "root://o//f", origin.size)) {
-            h.read(0, BS, origin).join();
+            release(h.read(0, BS, origin).join());
             awaitPublished(c, BS);
         }
         c.close();
@@ -316,7 +326,7 @@ class CacheTest {
         for (int i = 0; i < 3; i++) {
             FakeOrigin origin = new FakeOrigin(10L * BS);
             try (CacheHandle h = c.acquire(new CacheKey("f" + i), "root://o//f" + i, origin.size)) {
-                h.read(0, 3 * BS, origin).join();
+                release(h.read(0, 3 * BS, origin).join());
                 awaitPublished(c, (i + 1) * 3L * BS);
             }
             Thread.sleep(5); // distinct access times
@@ -324,7 +334,7 @@ class CacheTest {
         // f3 is held open and pushes usage to 12 blocks
         FakeOrigin origin = new FakeOrigin(10L * BS);
         try (CacheHandle h = c.acquire(new CacheKey("f3"), "root://o//f3", origin.size)) {
-            h.read(0, 3 * BS, origin).join();
+            release(h.read(0, 3 * BS, origin).join());
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (c.usedBytes() > 5L * BS && System.nanoTime() < deadline) {
                 Thread.sleep(5);

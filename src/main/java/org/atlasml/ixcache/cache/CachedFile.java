@@ -19,6 +19,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.LongConsumer;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,6 +38,13 @@ final class CachedFile {
 
     private static final Logger log = LoggerFactory.getLogger(CachedFile.class);
 
+    /**
+     * Fetched data goes to disk this much at a time through a pooled direct buffer.
+     * Writing the heap buffer directly would make the JDK copy all of it into a
+     * temporary direct buffer that it then keeps cached per thread.
+     */
+    private static final int WRITE_CHUNK = 1024 * 1024;
+
     private final Path metaPath;
     private final String key;
     private final String originUrl;
@@ -44,6 +53,7 @@ final class CachedFile {
     private final int maxRunBlocks;
     private final FileChannel data;
     private final Executor io;
+    private final WriteBudget writes;
     private final LongConsumer onPublished;
 
     private final Object lock = new Object();
@@ -55,7 +65,7 @@ final class CachedFile {
     private boolean closed; // guarded by lock
 
     private CachedFile(Path dataPath, Path metaPath, FileMeta meta, int maxRequestBytes,
-            Executor io, LongConsumer onPublished) throws IOException {
+            Executor io, WriteBudget writes, LongConsumer onPublished) throws IOException {
         this.metaPath = metaPath;
         this.key = meta.key();
         this.originUrl = meta.originUrl();
@@ -65,6 +75,7 @@ final class CachedFile {
         this.present = (BitSet) meta.present().clone();
         this.lastAccess = meta.lastAccess();
         this.io = io;
+        this.writes = writes;
         this.onPublished = onPublished;
         this.data = FileChannel.open(dataPath, StandardOpenOption.CREATE, StandardOpenOption.READ,
                 StandardOpenOption.WRITE);
@@ -72,11 +83,12 @@ final class CachedFile {
 
     /**
      * Opens the block store described by {@code meta}. {@code onPublished} is
-     * called with the byte count of every run of blocks that becomes present.
+     * called with the byte count of every run of blocks that becomes present;
+     * {@code writes} limits the fetched data waiting for {@code io} to write it.
      */
     static CachedFile open(Path dataPath, Path metaPath, FileMeta meta, int maxRequestBytes,
-            Executor io, LongConsumer onPublished, boolean isNew) throws IOException {
-        CachedFile f = new CachedFile(dataPath, metaPath, meta, maxRequestBytes, io, onPublished);
+            Executor io, WriteBudget writes, LongConsumer onPublished, boolean isNew) throws IOException {
+        CachedFile f = new CachedFile(dataPath, metaPath, meta, maxRequestBytes, io, writes, onPublished);
         if (isNew) {
             synchronized (f.lock) {
                 f.dirty = true;
@@ -104,15 +116,14 @@ final class CachedFile {
     /**
      * Reads {@code requested} ranges, serving present blocks from disk and
      * fetching missing ones from {@code origin}. Ranges past end of file are
-     * truncated.
+     * truncated. Disk reads run on the I/O executor, not the calling thread. The
+     * result's buffers are pooled: the caller must release them.
      */
     CompletableFuture<ReadResult> read(List<Range> requested, OriginReader origin) {
         List<Range> ranges = requested.stream().map(r -> r.clamp(fileSize)).toList();
-        ByteBuffer[] out = new ByteBuffer[ranges.size()];
         TreeSet<Integer> needed = new TreeSet<>();
         for (int i = 0; i < ranges.size(); i++) {
             Range r = ranges.get(i);
-            out[i] = ByteBuffer.allocate(r.length());
             if (r.length() > 0) {
                 for (int b = blockOf(r.offset()); b <= blockOf(r.end() - 1); b++) {
                     needed.add(b);
@@ -144,20 +155,32 @@ final class CachedFile {
 
         long fetched = fetch(toFetch, pending, origin);
 
-        long bytesHit;
-        try {
-            bytesHit = readHits(ranges, out, hit);
-        } catch (IOException e) {
-            return CompletableFuture.failedFuture(e);
+        ByteBuf[] out = new ByteBuf[ranges.size()];
+        for (int i = 0; i < out.length; i++) {
+            int len = ranges.get(i).length();
+            out[i] = PooledByteBufAllocator.DEFAULT.directBuffer(len, len).writerIndex(len);
         }
-
-        if (pending.isEmpty()) {
-            return CompletableFuture.completedFuture(new ReadResult(List.of(out), bytesHit, fetched));
+        CompletableFuture<Long> hits;
+        if (hit.isEmpty()) {
+            hits = CompletableFuture.completedFuture(0L);
+        } else {
+            try {
+                hits = CompletableFuture.supplyAsync(() -> readHits(ranges, out, hit), io);
+            } catch (RejectedExecutionException e) {
+                hits = CompletableFuture.failedFuture(new IOException("cache closed: " + key));
+            }
         }
-        return CompletableFuture.allOf(pending.values().toArray(CompletableFuture[]::new))
-                .thenApply(v -> {
+        // thenCombine waits for both, so nothing writes into out once it is released.
+        return hits.thenCombine(CompletableFuture.allOf(pending.values().toArray(CompletableFuture[]::new)),
+                (bytesHit, v) -> {
                     copyPending(ranges, out, pending);
                     return new ReadResult(List.of(out), bytesHit, fetched);
+                }).whenComplete((r, err) -> {
+                    if (err != null) {
+                        for (ByteBuf b : out) {
+                            b.release();
+                        }
+                    }
                 });
     }
 
@@ -226,23 +249,44 @@ final class CachedFile {
     }
 
     private void schedulePublish(int[] run, Range r, ByteBuffer buf) {
+        // The readers already have the data: if the disk is behind, just don't cache it.
+        if (!writes.tryAcquire(r.length())) {
+            discard(blocksOf(run));
+            return;
+        }
         try {
-            io.execute(() -> publish(run, r, buf));
+            io.execute(() -> {
+                try {
+                    publish(run, r, buf);
+                } finally {
+                    writes.release(r.length());
+                }
+            });
         } catch (RejectedExecutionException e) {
+            writes.release(r.length());
             discard(blocksOf(run));
         }
     }
 
     private void publish(int[] run, Range r, ByteBuffer buf) {
+        ByteBuf staging = PooledByteBufAllocator.DEFAULT.directBuffer(Math.min(WRITE_CHUNK, buf.remaining()));
         try {
             long pos = r.offset();
             while (buf.hasRemaining()) {
-                pos += data.write(buf, pos);
+                int n = Math.min(staging.capacity(), buf.remaining());
+                ByteBuffer chunk = staging.nioBuffer(0, n);
+                chunk.put(buf.slice(buf.position(), n)).flip();
+                buf.position(buf.position() + n);
+                while (chunk.hasRemaining()) {
+                    pos += data.write(chunk, pos);
+                }
             }
         } catch (IOException e) {
             log.warn("cache write failed for {} at {}: {}", key, r, e.toString());
             discard(blocksOf(run));
             return;
+        } finally {
+            staging.release();
         }
         synchronized (lock) {
             for (int j = 0; j < run[1]; j++) {
@@ -270,31 +314,36 @@ final class CachedFile {
         }
     }
 
-    private long readHits(List<Range> ranges, ByteBuffer[] out, BitSet hit) throws IOException {
+    /** Reads the {@code hit} blocks of {@code ranges} from disk into {@code out}. Returns bytes read. */
+    private long readHits(List<Range> ranges, ByteBuf[] out, BitSet hit) {
         long hits = 0;
-        for (int i = 0; i < ranges.size(); i++) {
-            Range r = ranges.get(i);
-            long pos = r.offset();
-            long end = r.end();
-            while (pos < end) {
-                int b = blockOf(pos);
-                long spanEnd = Math.min(blockEnd(b), end);
-                if (!hit.get(b)) {
+        try {
+            for (int i = 0; i < ranges.size(); i++) {
+                Range r = ranges.get(i);
+                long pos = r.offset();
+                long end = r.end();
+                while (pos < end) {
+                    int b = blockOf(pos);
+                    long spanEnd = Math.min(blockEnd(b), end);
+                    if (!hit.get(b)) {
+                        pos = spanEnd;
+                        continue;
+                    }
+                    for (int nb = b + 1; spanEnd < end && hit.get(nb); nb++) {
+                        spanEnd = Math.min(blockEnd(nb), end);
+                    }
+                    readFully(out[i].nioBuffer((int) (pos - r.offset()), (int) (spanEnd - pos)), pos);
+                    hits += spanEnd - pos;
                     pos = spanEnd;
-                    continue;
                 }
-                for (int nb = b + 1; spanEnd < end && hit.get(nb); nb++) {
-                    spanEnd = Math.min(blockEnd(nb), end);
-                }
-                readFully(out[i].slice((int) (pos - r.offset()), (int) (spanEnd - pos)), pos);
-                hits += spanEnd - pos;
-                pos = spanEnd;
             }
+        } catch (IOException e) {
+            throw new CompletionException(e);
         }
         return hits;
     }
 
-    private void copyPending(List<Range> ranges, ByteBuffer[] out, Map<Integer, CompletableFuture<ByteBuffer>> pending) {
+    private void copyPending(List<Range> ranges, ByteBuf[] out, Map<Integer, CompletableFuture<ByteBuffer>> pending) {
         for (int i = 0; i < ranges.size(); i++) {
             Range r = ranges.get(i);
             if (r.length() == 0) {
@@ -309,7 +358,7 @@ final class CachedFile {
                 long blockStart = (long) b * blockSize;
                 long from = Math.max(r.offset(), blockStart);
                 long to = Math.min(r.end(), blockStart + src.remaining());
-                out[i].put((int) (from - r.offset()), src, (int) (from - blockStart), (int) (to - from));
+                out[i].setBytes((int) (from - r.offset()), src.slice((int) (from - blockStart), (int) (to - from)));
             }
         }
     }

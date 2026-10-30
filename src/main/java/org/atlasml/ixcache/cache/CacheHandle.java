@@ -32,7 +32,10 @@ public final class CacheHandle implements Closeable {
         return readv(List.of(new Range(offset, length)), origin);
     }
 
-    /** Reads several ranges; all missing blocks go to {@code origin} in one request. */
+    /**
+     * Reads several ranges; all missing blocks go to {@code origin} in one request.
+     * The caller must release the result's buffers.
+     */
     public CompletableFuture<ReadResult> readv(List<Range> ranges, OriginReader origin) {
         if (closed.get()) {
             throw new IllegalStateException("handle closed");

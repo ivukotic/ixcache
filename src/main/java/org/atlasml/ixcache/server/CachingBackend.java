@@ -11,6 +11,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import org.atlasml.ixcache.cache.CacheHandle;
 import org.atlasml.ixcache.cache.CacheKey;
 import org.atlasml.ixcache.cache.MultiCache;
@@ -133,14 +135,26 @@ public final class CachingBackend implements Backend {
         }
 
         @Override
-        public CompletableFuture<List<ByteBuffer>> readv(List<Range> ranges) {
+        public CompletableFuture<List<ByteBuf>> read(List<Range> ranges) {
             return handle.readv(ranges, missing -> origin().thenCompose(f -> f.readv(missing)))
                     .thenApply(r -> {
                         bytesHit.addAndGet(r.bytesHit());
                         bytesFetched.addAndGet(r.bytesFetched());
-                        r.data().forEach(b -> bytesOut.addAndGet(b.remaining()));
+                        r.data().forEach(b -> bytesOut.addAndGet(b.readableBytes()));
                         return r.data();
                     });
+        }
+
+        /** Copies out of the pooled buffers; clients are served through {@link #read}. */
+        @Override
+        public CompletableFuture<List<ByteBuffer>> readv(List<Range> ranges) {
+            return read(ranges).thenApply(bufs -> {
+                try {
+                    return bufs.stream().map(b -> ByteBuffer.wrap(ByteBufUtil.getBytes(b))).toList();
+                } finally {
+                    bufs.forEach(ByteBuf::release);
+                }
+            });
         }
 
         /** The origin file, opened on first use; a failed open is retried by the next miss. */

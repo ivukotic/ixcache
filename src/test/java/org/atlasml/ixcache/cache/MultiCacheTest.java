@@ -69,7 +69,7 @@ class MultiCacheTest {
         // Fill most of disk a.
         FakeOrigin origin = new FakeOrigin(48 * MB);
         try (CacheHandle h = a.acquire(new CacheKey("rucio:s:big"), "root://o//big", origin.size)) {
-            h.read(0, (int) origin.size, origin).join();
+            CacheTest.release(h.read(0, (int) origin.size, origin).join());
         }
         CacheTest.awaitPublished(a, 48 * MB);
 

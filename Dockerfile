@@ -29,7 +29,7 @@ COPY --from=build /src/target/lib/ /opt/ixcache/lib/
 ENV IXCACHE_CACHE_DIR=/data \
     X509_USER_PROXY=/etc/proxy/x509up \
     X509_CERT_DIR=/etc/grid-security/certificates \
-    JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
+    JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=50 -Djdk.nio.maxCachedBufferSize=1048576 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
 
 USER 10940:10940
 WORKDIR /opt/ixcache

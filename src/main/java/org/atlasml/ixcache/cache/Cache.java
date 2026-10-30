@@ -36,8 +36,12 @@ public final class Cache implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(Cache.class);
 
+    /** Fetched bytes that may wait in memory to be written to this disk; more are not cached. */
+    static final long MAX_PENDING_WRITE_BYTES = 128L * 1024 * 1024;
+
     private final CacheConfig cfg;
     private final ExecutorService io;
+    private final WriteBudget writes = new WriteBudget(MAX_PENDING_WRITE_BYTES);
     private final ScheduledExecutorService timer;
     private final Map<String, Entry> entries = new HashMap<>(); // guarded by this
     private final AtomicLong used = new AtomicLong();
@@ -83,7 +87,7 @@ public final class Cache implements Closeable {
         return open(cfg, Executors.newVirtualThreadPerTaskExecutor());
     }
 
-    /** As {@link #open(CacheConfig)}, with {@code io} running disk writes and closes. */
+    /** As {@link #open(CacheConfig)}, with {@code io} running disk reads, writes and closes. */
     public static Cache open(CacheConfig cfg, ExecutorService io) throws IOException {
         Files.createDirectories(cfg.root());
         Cache c = new Cache(cfg, io);
@@ -186,14 +190,14 @@ public final class Cache implements Closeable {
         Files.deleteIfExists(e.data);
         Files.deleteIfExists(e.meta);
         FileMeta meta = new FileMeta(key.id(), originUrl, fileSize, cfg.blockSize(), e.lastAccess, new BitSet());
-        e.file = CachedFile.open(e.data, e.meta, meta, cfg.maxRequestBytes(), io, published(e), true);
+        e.file = CachedFile.open(e.data, e.meta, meta, cfg.maxRequestBytes(), io, writes, published(e), true);
         entries.put(key.id(), e);
         return e;
     }
 
     private CachedFile openExisting(Entry e) throws IOException {
         FileMeta meta = FileMeta.read(e.meta);
-        return CachedFile.open(e.data, e.meta, meta, cfg.maxRequestBytes(), io, published(e), false);
+        return CachedFile.open(e.data, e.meta, meta, cfg.maxRequestBytes(), io, writes, published(e), false);
     }
 
     private java.util.function.LongConsumer published(Entry e) {
@@ -314,6 +318,11 @@ public final class Cache implements Closeable {
     }
 
     private void flushOpen() {
+        long skipped = writes.takeSkipped();
+        if (skipped > 0) {
+            log.warn("{}: disk writes fell behind, {} fetched bytes were served but not cached",
+                    cfg.root(), skipped);
+        }
         List<CachedFile> open;
         synchronized (this) {
             open = entries.values().stream().map(e -> e.file).filter(f -> f != null).toList();

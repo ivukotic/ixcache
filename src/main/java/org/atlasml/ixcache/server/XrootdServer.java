@@ -19,6 +19,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
@@ -91,6 +92,9 @@ public final class XrootdServer implements AutoCloseable {
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.TCP_NODELAY, true)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    // Above the high mark a connection stops reading requests (see ClientHandler).
+                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                            new WriteBufferWaterMark(16 * 1024 * 1024, 64 * 1024 * 1024))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {

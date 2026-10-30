@@ -140,8 +140,12 @@ spec:
             # clients require the server certificate to match the host name).
             - name: IXCACHE_AUTH
               value: none
+            # The memory limit covers heap, direct buffers (Netty, NIO) and the page
+            # cache of writes to the cache disks: 16Gi heap + 8Gi direct leaves room.
+            # NativeMemoryTracking is for diagnosis (jcmd 1 VM.native_memory summary);
+            # drop it once memory use is understood.
             - name: JDK_JAVA_OPTIONS
-              value: "-XX:MaxRAMPercentage=75 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError"
+              value: "-XX:MaxRAMPercentage=50 -XX:MaxDirectMemorySize=8g -Djdk.nio.maxCachedBufferSize=1048576 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError -XX:NativeMemoryTracking=summary"
           resources:
             requests:
               cpu: "16"
