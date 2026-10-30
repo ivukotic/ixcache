@@ -18,7 +18,8 @@
     <slf4j.version>2.0.16</slf4j.version>
     <junit.version>5.11.4</junit.version>
     <xrootd4j.version>4.6.5</xrootd4j.version>
-    <netty.version>4.1.118.Final</netty.version>
+    <netty.version>4.1.139.Final</netty.version>
+    <bouncycastle.version>1.86</bouncycastle.version>
   </properties>
 
   <dependencyManagement>
@@ -31,23 +32,39 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
-      <!-- xrootd4j-gsi pins canl 2.1.1, which subclasses BouncyCastle internals that
-           are no longer public in the bcprov it also pins, so chain validation fails
-           with IllegalAccessError. canl 2.7.0 is built against BouncyCastle 1.68. -->
+      <!-- xrootd4j-gsi pins canl 2.1.1 and BouncyCastle jdk15on 1.68, both with known
+           CVEs and mutually incompatible (IllegalAccessError in chain validation).
+           canl 2.9.0 is built against the maintained jdk18on BouncyCastle artifacts. -->
       <dependency>
         <groupId>eu.eu-emi.security</groupId>
         <artifactId>canl</artifactId>
-        <version>2.7.0</version>
+        <version>2.9.0</version>
       </dependency>
       <dependency>
         <groupId>org.bouncycastle</groupId>
-        <artifactId>bcprov-jdk15on</artifactId>
-        <version>1.68</version>
+        <artifactId>bcprov-jdk18on</artifactId>
+        <version>${bouncycastle.version}</version>
       </dependency>
       <dependency>
         <groupId>org.bouncycastle</groupId>
-        <artifactId>bcpkix-jdk15on</artifactId>
-        <version>1.68</version>
+        <artifactId>bcpkix-jdk18on</artifactId>
+        <version>${bouncycastle.version}</version>
+      </dependency>
+      <!-- Transitive versions pulled in by xrootd4j/canl have known CVEs. -->
+      <dependency>
+        <groupId>com.google.guava</groupId>
+        <artifactId>guava</artifactId>
+        <version>33.7.2-jre</version>
+      </dependency>
+      <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>2.22.0</version>
+      </dependency>
+      <dependency>
+        <groupId>commons-codec</groupId>
+        <artifactId>commons-codec</artifactId>
+        <version>1.23.0</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
@@ -81,6 +98,13 @@
       <groupId>org.dcache</groupId>
       <artifactId>xrootd4j-gsi</artifactId>
       <version>${xrootd4j.version}</version>
+      <exclusions>
+        <!-- Superseded by bcprov-jdk18on via canl; both on the classpath would clash. -->
+        <exclusion>
+          <groupId>org.bouncycastle</groupId>
+          <artifactId>bcprov-jdk15on</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
