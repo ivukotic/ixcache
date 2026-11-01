@@ -19,7 +19,7 @@
     <junit.version>5.11.4</junit.version>
     <xrootd4j.version>4.6.5</xrootd4j.version>
     <netty.version>4.1.139.Final</netty.version>
-    <bouncycastle.version>1.86</bouncycastle.version>
+    <bouncycastle.version>1.85</bouncycastle.version>
   </properties>
 
   <dependencyManagement>
@@ -34,7 +34,9 @@
       </dependency>
       <!-- xrootd4j-gsi pins canl 2.1.1 and BouncyCastle jdk15on 1.68, both with known
            CVEs and mutually incompatible (IllegalAccessError in chain validation).
-           canl 2.9.0 is built against the maintained jdk18on BouncyCastle artifacts. -->
+           canl 2.9.0 is built against the maintained jdk18on BouncyCastle artifacts (1.84).
+           Do not go past BouncyCastle 1.85: 1.86 moved PKIXPolicyNode to org.bouncycastle.jcajce,
+           and canl's FixedBCPKIXCertPathReviewer then fails GSI auth with a ClassCastException. -->
       <dependency>
         <groupId>eu.eu-emi.security</groupId>
         <artifactId>canl</artifactId>
