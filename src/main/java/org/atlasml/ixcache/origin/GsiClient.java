@@ -67,6 +67,9 @@ final class GsiClient {
     GsiClient(OriginConfig cfg) throws FileNotFoundException {
         this.proxy = cfg.proxy().map(ProxyCredential::new);
         this.props = GsiProperties.of(cfg.caDir(), null, null);
+        // As XRootD clients do: origins' host certificates need not match the IGTF
+        // namespace policies (e.g. a bare CN from a CA whose namespace requires O=).
+        props.setProperty("xrootd.gsi.ca.namespace-mode", "IGNORE");
         this.validator = new CertChainValidatorProvider(props).getCertChainValidator();
         this.loader = new CredentialLoader(props, validator);
     }
