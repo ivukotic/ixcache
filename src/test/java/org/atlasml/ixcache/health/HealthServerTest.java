@@ -34,6 +34,9 @@ import org.atlasml.ixcache.origin.OriginConfig;
 import org.atlasml.ixcache.server.LocalBackend;
 import org.atlasml.ixcache.server.ServerConfig;
 import org.atlasml.ixcache.server.XrootdServer;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.cert.X509v2CRLBuilder;
+import org.bouncycastle.cert.jcajce.JcaX509CRLConverter;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
 import org.bouncycastle.openssl.jcajce.JcaPEMWriter;
@@ -161,6 +164,32 @@ class HealthServerTest {
     }
 
     @Test
+    void expiredCrlsAreAWarningNotAFailure() throws Exception {
+        writeProxy(Instant.now().plus(Duration.ofHours(12)));
+        Path ca = dir.resolve("ca");
+        Instant now = Instant.now();
+        writeCrl(ca.resolve("11111111.r0"), "CN=Current CA,O=ixcache", now.plus(Duration.ofDays(3)));
+        // One CA's CRL under both of its subject hashes, as fetch-crl installs it.
+        writeCrl(ca.resolve("22222222.r0"), "CN=Stale CA,O=ixcache", now.minus(Duration.ofHours(6)));
+        Files.copy(ca.resolve("22222222.r0"), ca.resolve("33333333.r0"));
+        Files.writeString(ca.resolve("44444444.r0"), "truncated");
+        startHealth(Duration.ofSeconds(1));
+
+        HttpResponse<String> ready = get("/readyz");
+        assertEquals(200, ready.statusCode(), ready.body());
+        assertTrue(ready.body().contains("\"crls\":{\"ok\":true,\"detail\":\"1 of 2 CRLs expired: CN=Stale CA,O=ixcache "
+                + "(next update "), ready.body());
+        assertTrue(ready.body().contains("unreadable: 44444444.r0\",\"warning\":true}"), ready.body());
+        awaitBeats(1);
+
+        writeCrl(ca.resolve("22222222.r0"), "CN=Stale CA,O=ixcache", now.plus(Duration.ofDays(7)));
+        Files.copy(ca.resolve("22222222.r0"), ca.resolve("33333333.r0"), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Files.delete(ca.resolve("44444444.r0"));
+        ready = get("/readyz");
+        assertTrue(ready.body().contains("\"crls\":{\"ok\":true,\"detail\":\"2 CRLs current\"}"), ready.body());
+    }
+
+    @Test
     void heartbeatSettingsAreRequiredTogether() {
         assertTrue(Heartbeat.Config.fromEnv(java.util.Map.of()).isEmpty());
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
@@ -184,6 +213,22 @@ class HealthServerTest {
             Thread.sleep(20);
         }
         assertEquals(n, beats.size());
+    }
+
+    /** A PEM CRL from {@code issuer}, valid until {@code nextUpdate}. */
+    private static void writeCrl(Path file, String issuer, Instant nextUpdate) throws Exception {
+        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
+        g.initialize(2048);
+        KeyPair kp = g.generateKeyPair();
+        X509v2CRLBuilder b = new X509v2CRLBuilder(
+                X500Name.getInstance(new X500Principal(issuer).getEncoded()),Date.from(nextUpdate.minus(Duration.ofDays(7))));
+        b.setNextUpdate(Date.from(nextUpdate));
+        var crl = new JcaX509CRLConverter().getCRL(b.build(new JcaContentSignerBuilder("SHA256withRSA").build(kp.getPrivate())));
+        StringWriter pem = new StringWriter();
+        try (JcaPEMWriter w = new JcaPEMWriter(pem)) {
+            w.writeObject(crl);
+        }
+        Files.writeString(file, pem.toString());
     }
 
     /** A self-signed certificate and key in one PEM file, standing in for a proxy. */

@@ -156,6 +156,7 @@ spec:
           # /healthz: XRootD port open and network threads responsive.
           # /readyz: also a writable cache disk, a valid service proxy and CA
           # certificates; passing it sends the VPS heartbeat when one is due.
+          # Expired CRLs show as a warning in its report but do not fail it.
           startupProbe:
             httpGet:
               path: /healthz

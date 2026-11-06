@@ -238,7 +238,8 @@ directories on one file system need an explicit `IXCACHE_CACHE_SIZE`.
 manifests, and health endpoints on `IXCACHE_HEALTH_PORT` (8092). `/healthz`
 checks that the XRootD port is open and the network threads respond; `/readyz`
 also checks for a writable cache disk, an unexpired service proxy and CA
-certificates. A passing `/readyz` sends the VPS heartbeat (`IXCACHE_HEARTBEAT_URL`,
+certificates; expired or unreadable CRLs appear in its report as a warning
+(`"warning":true`, also logged once) without failing it. A passing `/readyz` sends the VPS heartbeat (`IXCACHE_HEARTBEAT_URL`,
 `IXCACHE_SITE`, `IXCACHE_INSTANCE`, `IXCACHE_ADDRESS`; JSON with `size` = cache
 disk capacity in KB) at most once per `IXCACHE_HEARTBEAT_INTERVAL` (60 s), like
 the native XCache heartbeat container. Rucio heartbeats come from that native

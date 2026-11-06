@@ -95,7 +95,11 @@ public final class HealthServer implements AutoCloseable {
                 sb.append(',');
             }
             sb.append(Json.quote(c.name())).append(":{\"ok\":").append(c.ok())
-                    .append(",\"detail\":").append(Json.quote(c.detail())).append('}');
+                    .append(",\"detail\":").append(Json.quote(c.detail()));
+            if (c.warning()) {
+                sb.append(",\"warning\":true");
+            }
+            sb.append('}');
         }
         sb.append('}');
         if (heartbeat != null) {
