@@ -1,0 +1,62 @@
+# Reads the hot working set once through every endpoint, so that a following
+# `stress --mode=hot` measures hits. Start with bench/k8s/launch.sh warm.
+#
+# The selection arguments (--seed, --until, --count, sizes) must be the same
+# as in stress.yaml, or the stress test reads files that were not warmed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ixbench-warm-__RUN__
+  namespace: ixcache
+  labels:
+    app.kubernetes.io/name: ixbench
+    ixbench/run: "__RUN__"
+spec:
+  completionMode: Indexed
+  completions: 4
+  parallelism: 4
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ixbench
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ixcache
+      containers:
+        - name: ixbench
+          image: ivukotic/ixcache-bench:latest
+          imagePullPolicy: Always
+          args:
+            - warm
+            - --run=__RUN__
+            - --concurrency=8
+            # Hot working set: keep identical to stress.yaml.
+            - --count=300
+            - --seed=7
+            - --until=2026-11-20T00:00:00Z
+            - --min-size=100M
+            - --max-size=5G
+          env:
+            - name: NPODS # = completions
+              value: "4"
+            - name: ENDPOINTS
+              value: "c111.af.uchicago.edu:1094,c112.af.uchicago.edu:1094,c113.af.uchicago.edu:1094"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - secretRef:
+                name: ixbench-es
+                optional: true
+          resources:
+            requests: { cpu: "2", memory: 1Gi }
+            limits: { memory: 2Gi }

@@ -1,0 +1,90 @@
+# Maximum combined throughput of one or more ixcaches. NPODS client pods start
+# together at __START_AT__ and step through --stages (streams per pod), each
+# --stage-seconds long. Start with bench/k8s/launch.sh stress; see
+# docs/benchmarking.md.
+#
+# --mode=hot: random whole-file reads from a working set warmed by warm.yaml
+#   (keep the selection arguments identical there). Measures the cache disks,
+#   the server and the network.
+# --mode=cold: every file is read once, files never read through the
+#   --cold-for instances. Measures misses, so also the origins and the WAN.
+#   Needs about (expected GB/s x total seconds / mean file size) files.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ixbench-stress-__RUN__
+  namespace: ixcache
+  labels:
+    app.kubernetes.io/name: ixbench
+    ixbench/run: "__RUN__"
+spec:
+  completionMode: Indexed
+  completions: 8
+  parallelism: 8
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ixbench
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          # Never on a cache node.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ixcache
+          # One client per node where possible, so client NICs are not the limit.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ixbench
+      containers:
+        - name: ixbench
+          image: ivukotic/ixcache-bench:latest
+          imagePullPolicy: Always
+          args:
+            - stress
+            - --run=__RUN__
+            - --start-at=__START_AT__
+            - --mode=hot
+            - --stages=2,4,8,16,32,64
+            - --stage-seconds=180
+            - --warmup-seconds=30
+            # Hot working set: keep identical to warm.yaml.
+            - --count=300
+            - --seed=7
+            - --until=2026-11-20T00:00:00Z
+            - --min-size=100M
+            - --max-size=5G
+            # For --mode=cold instead:
+            # - --count=8000
+            # - --seed=__SEED__
+            # - --cold-for=xc-af-new-1,xc-af-new-2,xc-af-new-3
+          env:
+            - name: NPODS # = completions
+              value: "8"
+            # Caches under test, host:port, comma-separated. Streams are spread
+            # evenly over them.
+            - name: ENDPOINTS
+              value: "c111.af.uchicago.edu:1094,c112.af.uchicago.edu:1094,c113.af.uchicago.edu:1094"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - secretRef:
+                name: ixbench-es
+                optional: true
+          # Every byte passes through xrdcp and a pipe to ixbench, so clients use
+          # CPU too: if per-pod rates in the report flatten while ixcache has
+          # headroom, add pods (or CPU) rather than streams.
+          resources:
+            requests: { cpu: "4", memory: 2Gi }
+            limits: { memory: 4Gi }

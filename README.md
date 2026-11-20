@@ -25,3 +25,4 @@ Some references:
 xrootd project: https://xrootd.org/
 xrootd protocol: https://xrootd.web.cern.ch/doc/dev6/XRdv520.html
 root project: https://root.cern.ch/doc/v640/
+Benchmarking (cold vs hot reads, maximum throughput) is described in [docs/benchmarking.md](docs/benchmarking.md).

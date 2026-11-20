@@ -4,8 +4,10 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["bench/**", ".github/workflows/bench.yml"]
   pull_request:
     branches: [main]
+    paths-ignore: ["bench/**", ".github/workflows/bench.yml"]
   workflow_dispatch:
 
 env:

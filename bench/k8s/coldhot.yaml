@@ -1,0 +1,117 @@
+# Cold vs hot (vs direct-from-origin) read of each file, one at a time, from
+# one client. Start with bench/k8s/launch.sh coldhot; see docs/benchmarking.md.
+#
+# --cold-for skips files ever read through that ixcache instance, so the first
+# read is a miss. Every run reads new files (its own reads are recorded too).
+# --direct needs a grid proxy: the x509 sidecar makes one from the
+# xcache-cert-secret, as in deploy/deployment.yaml (first one takes up to
+# ~15 minutes). Without --direct the sidecar and its volumes can be removed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ixbench-coldhot-__RUN__
+  namespace: ixcache
+  labels:
+    app.kubernetes.io/name: ixbench
+    ixbench/run: "__RUN__"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ixbench
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10940
+        runAsGroup: 10940
+      affinity:
+        # Never on a cache node: the client would compete with the server.
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: ixcache
+      initContainers:
+        - name: x509
+          restartPolicy: Always
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+          command: [/usr/local/sbin/run_x509_updater.sh]
+          image: harbor.tempest.uchicago.edu/docker.io/ivukotic/atlas-xcache-heartbeats:2026.10.18
+          startupProbe:
+            exec:
+              command:
+                [
+                  sh,
+                  -c,
+                  "test -d /etc/CA/certificates && test -s /etc/proxy/x509up",
+                ]
+            periodSeconds: 5
+            failureThreshold: 180
+          resources:
+            requests: { cpu: 100m, memory: 512M }
+            limits: { cpu: 500m, memory: 2Gi }
+          volumeMounts:
+            - { name: x509-data, mountPath: /etc/proxy/ }
+            - {
+                name: x509-certs-volume,
+                mountPath: /etc/grid-certs/,
+                readOnly: true,
+              }
+            - { name: grid-security, mountPath: /etc/CA }
+      containers:
+        - name: ixbench
+          image: ivukotic/ixcache-bench:latest
+          imagePullPolicy: Always
+          args:
+            - coldhot
+            - --run=__RUN__
+            - --direct
+            - --count=50
+            - --seed=__SEED__
+            - --min-size=100M
+            - --max-size=5G
+            - --cold-for=xcache-uc-1
+            - --hot-delay=5
+          env:
+            # The cache under test, host:port (comma-separated: files alternate).
+            - name: ENDPOINTS
+              value: "c111.af.uchicago.edu:1094,c112.af.uchicago.edu:1094,c113.af.uchicago.edu:1094"
+            - name: X509_USER_PROXY
+              value: /etc/proxy/x509up
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            # ES_URL and ES_USER/ES_PASSWORD or ES_API_KEY, for file selection.
+            - secretRef:
+                name: ixbench-es
+                optional: true
+          resources:
+            requests: { cpu: "2", memory: 1Gi }
+            limits: { memory: 2Gi }
+          volumeMounts:
+            - { name: x509-data, mountPath: /etc/proxy, readOnly: true }
+            - {
+                name: grid-security,
+                mountPath: /etc/grid-security,
+                readOnly: true,
+              }
+      volumes:
+        - name: grid-security
+          emptyDir: { sizeLimit: 200Mi }
+        - name: x509-data
+          emptyDir: { medium: Memory, sizeLimit: 10Mi }
+        - name: x509-certs-volume
+          secret:
+            secretName: xcache-cert-secret
+            defaultMode: 420
+            items:
+              - { key: userkey, path: userkey.pem, mode: 256 }
+              - { key: usercert, path: usercert.pem }
